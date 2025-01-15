@@ -32,7 +32,7 @@ model:
     alpha: 0.01
 
 train:
-  num_epochs: 100 # number of epochs for training the SDE
+  num_epochs: 500 # number of epochs for training the SDE
   batch_size: 2 # each batch will be [batch_size, train_traj_len, microscopic_dim], so use a small batch size if train_traj_len is large
   train_traj_len: 250 #250 #200 # 250 # can shrink the length of the training trajectories for better GPU performance
   checkpoint_every: 10 # number of epochs to check-point the model

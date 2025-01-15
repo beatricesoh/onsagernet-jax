@@ -221,7 +221,7 @@ def train_model(config: DictConfig):
         )  # change the trajectory length to improve GPU usage
 
     logger.info("Building model...")
-    model = build_model(config, dataset)
+    model = build_model(config, dataset)   # QX suggestion: pull Wi5 dataset for reduction, use to reduce Wi10
 
     # Train
     trainer = ClosureMLETrainer(
