@@ -35,7 +35,7 @@ def pull_data_and_convert(data_name: str, t_splits: list = [], train_traj: int =
     for sp in t_splits:  # Loop over each dataset split (train, validation, etc.)
         # Load the dataset for the current split
         dataset = load_dataset(data_name, split=sp)
-        dataset = dataset.map(multiply_t)
+        #dataset = dataset.map(multiply_t)
         # Define new features with reshaped arrays for 't', 'x', and 'args'
         new_features = Features(
             { 

@@ -6,8 +6,9 @@ dim: 3
 args: 2
 
 data:
-  repo: "MLDS-NUS/Wis_T_Reduced" # data repository
-  splits: ["Wi10_T1"]
+  repo: "MLDS-NUS/Fs_T_Reduced" # data repository
+  #repo_val: "MLDS-NUS/"
+  splits: ["F23_10_T1"]
 
 model:
   seed: 0 # random seed
