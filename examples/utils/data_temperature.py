@@ -5,14 +5,19 @@ from datasets import Dataset, Features, Array2D, concatenate_datasets
 from datasets import load_dataset
 import numpy as np
 
-import numpy as np
-import jax.numpy as jnp
-from datasets import Dataset, Features, Array2D
-
-# Function to apply element-wise multiplication on the 't' feature of the dataset
-def multiply_t(example):
+# Function to apply element-wise multiplication on the 't' and 'args' features of the dataset
+def scale_features(example):
     # Multiply the 't' feature by a small scalar (0.00005) element-wise - to be adjusted
     example['t'] = np.multiply(example['t'], 0.00005)
+    
+    # Multiply each column of 'args' by different constants
+    #scaling_factors = np.array([0.1,2000])
+    #example['args'] = example['args'] * scaling_factors  # Element-wise multiplication
+
+    # Scale second column of 'args' only
+    #example['args'] = np.array(example['args'])
+    #example['args'][:,1] = np.log10(example['args'][:,1]*2000)
+
     return example
 
 # Function to load datasets and optionally shrink the trajectory length
@@ -35,7 +40,8 @@ def pull_data_and_convert(data_name: str, t_splits: list = [], train_traj: int =
     for sp in t_splits:  # Loop over each dataset split (train, validation, etc.)
         # Load the dataset for the current split
         dataset = load_dataset(data_name, split=sp)
-        #dataset = dataset.map(multiply_t)
+        dataset = dataset.map(scale_features)
+
         # Define new features with reshaped arrays for 't', 'x', and 'args'
         new_features = Features(
             { 

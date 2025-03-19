@@ -35,6 +35,7 @@ import numpy as np
 import hydra
 from omegaconf import DictConfig
 import logging
+import time
 
 # ------------------------- Typing imports ------------------------- #
 # JAX specific typing for better type hinting
@@ -108,11 +109,20 @@ def train_model(config: DictConfig) -> None:
     Args:
         config (DictConfig): Configuration object containing training parameters and paths.
     """
-    # Set up logger for monitoring training progress
-    logger = logging.getLogger(__name__)
-
     # Get the runtime directory from Hydra's configuration
     runtime_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
+
+    # Set up logger for monitoring training progress
+    log_file = os.path.join(runtime_dir,"training.log")
+    logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - %(message)s",
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler()
+                ]
+            )
+    logger = logging.getLogger(__name__)
 
     # Load the data from the specified repository
     logger.info(f"Loading data from {config.data.repo}...")
