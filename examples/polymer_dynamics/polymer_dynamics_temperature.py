@@ -12,8 +12,12 @@ import equinox as eqx  # Neural network framework for JAX
 
 # Import data handling utilities
 from datasets import load_dataset  # Dataset loading function
-from examples.utils.data import shrink_trajectory_len  # Function to shrink trajectory length
-from examples.utils.data_temperature import pull_data_and_convert  # Function to load and convert data
+from examples.utils.data import (
+    shrink_trajectory_len,
+)  # Function to shrink trajectory length
+from examples.utils.data_temperature import (
+    pull_data_and_convert,
+)  # Function to load and convert data
 
 # Import dynamics and models from OnsagerNet library
 from onsagernet.dynamics import OnsagerNet, SDE  # Import OnsagerNet and SDE models
@@ -27,7 +31,11 @@ from onsagernet.models import (
 )
 
 # Import dataset classes for handling data
-from datasets import Dataset, Features, Array2D  # Import Dataset, Features, and Array2D utilities
+from datasets import (
+    Dataset,
+    Features,
+    Array2D,
+)  # Import Dataset, Features, and Array2D utilities
 from onsagernet.trainers import MLETrainer  # Import MLETrainer for training
 import numpy as np
 
@@ -43,6 +51,7 @@ from jax import Array
 from jax.typing import ArrayLike
 from datasets import Dataset  # Dataset class from datasets library
 from typing import Any  # General purpose type for any object
+
 
 # Function to build the model for polymer dynamics
 def build_model(config: DictConfig, dataset: Dataset) -> SDE:
@@ -68,6 +77,7 @@ def build_model(config: DictConfig, dataset: Dataset) -> SDE:
         activation=config.model.potential.activation,
         n_pot=config.model.potential.n_pot,
         alpha=config.model.potential.alpha,
+        param_dim=config.model.potential.param_dim,
     )
     dissipation = DissipationMatrixMLP(
         key=m_key,
@@ -100,7 +110,11 @@ def build_model(config: DictConfig, dataset: Dataset) -> SDE:
 
 
 # Hydra main function to start the training process
-@hydra.main(config_path="./config", config_name="polymer_dynamics_temperature", version_base=None)
+@hydra.main(
+    config_path="./config",
+    config_name="polymer_dynamics_temperature",
+    version_base=None,
+)
 def train_model(config: DictConfig) -> None:
     """
     Main training script for polymer dynamics with closure modelling. This function
@@ -113,15 +127,12 @@ def train_model(config: DictConfig) -> None:
     runtime_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
 
     # Set up logger for monitoring training progress
-    log_file = os.path.join(runtime_dir,"training.log")
+    log_file = os.path.join(runtime_dir, "training.log")
     logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(levelname)s - %(message)s",
-            handlers=[
-                logging.FileHandler(log_file),
-                logging.StreamHandler()
-                ]
-            )
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[logging.FileHandler(log_file), logging.StreamHandler()],
+    )
     logger = logging.getLogger(__name__)
 
     # Load the data from the specified repository
@@ -131,7 +142,9 @@ def train_model(config: DictConfig) -> None:
     train_traj_len = config.train.get("train_traj_len", None)
 
     # Pull the data and convert it to a JAX-compatible format (2D array)
-    dataset = pull_data_and_convert(config.data.repo, np.atleast_1d(config.data.splits), train_traj_len)
+    dataset = pull_data_and_convert(
+        config.data.repo, np.atleast_1d(config.data.splits), train_traj_len
+    )
 
     # Build the model using the configuration and dataset
     logger.info("Building model...")
@@ -160,4 +173,3 @@ def train_model(config: DictConfig) -> None:
 # Main entry point to start the training when the script is executed
 if __name__ == "__main__":
     train_model()  # Call the main training function
-
