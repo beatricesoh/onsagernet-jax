@@ -114,7 +114,7 @@ class PotentialMLP(MLP):
             units (list[int]): layer sizes
             activation (str): activation function (can be any in `jax.nn` or custom ones defined in `onsagernet._activations`)
             alpha (float): regulariser
-            param_dim (int, optional): dimensions of the parameters. Defaults to 0.
+            param_dim (int, optional): dimensions of the parameters (excluding temperature which is always the first parameter). Defaults to 0.
         """
         self.dim = dim
         units = units + [1]
