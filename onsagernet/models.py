@@ -190,6 +190,18 @@ class PotentialResMLP(MLP):
         return 0.5 * output_combined + regularisation
 
 
+class PotentialResMLPV2(PotentialResMLP):
+
+    def __call__(self, x: ArrayLike, args: ArrayLike) -> Array:
+        if self.param_dim > 0:
+            x_and_args = jnp.concatenate([x, args[1:]], axis=0)
+        output_phi = super(PotentialResMLP, self).__call__(x_and_args)
+        output_gamma = self.gamma_layer(x_and_args)
+        output_combined = (output_phi + output_gamma) @ (output_phi + output_gamma)
+        regularisation = self.alpha * (x @ x)
+        return 0.5 * output_combined + regularisation
+
+
 # ------------------------------------------------------------------ #
 #                        Dissipation networks                        #
 # ------------------------------------------------------------------ #
