@@ -24,7 +24,8 @@ from onsagernet.dynamics import OnsagerNet, SDE  # Import OnsagerNet and SDE mod
 
 # Import specific components from OnsagerNet models
 from onsagernet.models import (
-    PotentialResMLP,  # Model for potential energy
+    # PotentialResMLP,  # Model for potential energy
+    PotentialResMLPV2,  # Model for potential energy
     DissipationMatrixMLP,  # Model for dissipation matrix
     ConservationMatrixMLP,  # Model for conservation matrix
     DiffusionDiagonalConstant,  # Model for diffusion constant
@@ -55,6 +56,7 @@ from typing import Any  # General purpose type for any object
 
 # Function to build the model for polymer dynamics
 def build_model(config: DictConfig, dataset: Dataset) -> SDE:
+    # TODO: dataset is *NOT* used in this function
     """
     Builds the model for polymer dynamics using the OnsagerNet framework.
 
@@ -70,7 +72,8 @@ def build_model(config: DictConfig, dataset: Dataset) -> SDE:
     v_key, m_key, w_key, d_key = jax.random.split(init_keys, 4)
 
     # Initialize each model component
-    potential = PotentialResMLP(
+    potential = PotentialResMLPV2(
+        # potential = PotentialResMLP(
         key=v_key,
         dim=config.dim,
         units=config.model.potential.units,
