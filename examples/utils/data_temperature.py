@@ -5,37 +5,53 @@ from datasets import Dataset, Features, Array2D, concatenate_datasets
 from datasets import load_dataset
 import numpy as np
 
+import warnings
+
+
 # Function to apply element-wise multiplication on the 't' and 'args' features of the dataset
 def scale_features(example):
+    warnings.warn(
+        "This function is deprecated. Do not use.", DeprecationWarning, stacklevel=2
+    )
     # Multiply the 't' feature by a small scalar (0.00005) element-wise - to be adjusted
-    example['t'] = np.multiply(example['t'], 0.00005)
-    
+    example["t"] = np.multiply(example["t"], 0.00005)
+
     # Multiply each column of 'args' by different constants
-    #scaling_factors = np.array([0.1,2000])
-    #example['args'] = example['args'] * scaling_factors  # Element-wise multiplication
+    # scaling_factors = np.array([0.1,2000])
+    # example['args'] = example['args'] * scaling_factors  # Element-wise multiplication
 
     # Scale second column of 'args' only
-    #example['args'] = np.array(example['args'])
-    #example['args'][:,1] = np.log10(example['args'][:,1]*2000)
+    # example['args'] = np.array(example['args'])
+    # example['args'][:,1] = np.log10(example['args'][:,1]*2000)
 
     return example
 
+
 # Function to load datasets and optionally shrink the trajectory length
-def pull_data_and_convert(data_name: str, t_splits: list = [], train_traj: int = None) -> Dataset:
+def pull_data_and_convert(
+    data_name: str, t_splits: list = [], train_traj: int = None
+) -> Dataset:
     """
     Loads datasets from a given source and converts them into a desired format. Optionally,
     the trajectory length can be adjusted to improve GPU usage.
-    
+
     Args:
         data_name (str): Name of the dataset to load.
         t_splits (list): List of dataset splits to load (e.g., ['train', 'validation']).
         train_traj (int, optional): If provided, the trajectory length will be resized to this value.
-    
+
     Returns:
         Dataset: The final concatenated dataset after processing all splits.
     """
+    warnings.warn(
+        "This function is deprecated. Do not use.", DeprecationWarning, stacklevel=2
+    )
     datasets = []  # List to hold the processed datasets from each split
-    print(len(t_splits))  # Print the number of splits to load
+    print(
+        len(t_splits)
+    )  # Print the number of splits to load  # TODO: remove all print statements. Use logging instead.
+
+    dataset = load_dataset(data_name, split=t_splits)
 
     for sp in t_splits:  # Loop over each dataset split (train, validation, etc.)
         # Load the dataset for the current split
@@ -44,25 +60,25 @@ def pull_data_and_convert(data_name: str, t_splits: list = [], train_traj: int =
 
         # Define new features with reshaped arrays for 't', 'x', and 'args'
         new_features = Features(
-            { 
-                "t": Array2D(shape=(len(dataset['t'][0]), 1), dtype='float64'),
-                "x": Array2D(shape=(len(dataset['x'][0]), 3), dtype='float64'),
-                "args": Array2D(shape=(len(dataset['args'][0]), 2), dtype='float64'),
+            {
+                "t": Array2D(shape=(len(dataset["t"][0]), 1), dtype="float64"),
+                "x": Array2D(shape=(len(dataset["x"][0]), 3), dtype="float64"),
+                "args": Array2D(shape=(len(dataset["args"][0]), 2), dtype="float64"),
             }
         )
 
-        # Create a new dataset with the reshaped features
+        # # Create a new dataset with the reshaped features
         new_dataset = Dataset.from_dict(
             {
-                "t": dataset['t'],
-                "x": dataset['x'],
-                "args": dataset['args'],
+                "t": dataset["t"],
+                "x": dataset["x"],
+                "args": dataset["args"],
             },
             features=new_features,
         )
 
         # Clean up the original dataset to free memory
-        del(dataset)
+        del dataset
 
         # Convert the dataset format to 'jax' for compatibility with JAX-based operations
         the_dataset = new_dataset.with_format("jax")
@@ -72,10 +88,10 @@ def pull_data_and_convert(data_name: str, t_splits: list = [], train_traj: int =
             shrunk_dataset = shrink_trajectory_len(
                 the_dataset, train_traj
             )  # Reduce trajectory length to improve GPU usage
-            del(the_dataset)  # Clean up the original dataset
+            del the_dataset  # Clean up the original dataset
             datasets.append(shrunk_dataset)  # Add the processed dataset to the list
-            del(shrunk_dataset)  # Clean up the shrunk dataset
-        else: 
+            del shrunk_dataset  # Clean up the shrunk dataset
+        else:
             # If no trajectory length adjustment is needed, add the dataset directly
             datasets.append(the_dataset)
 
@@ -86,16 +102,17 @@ def pull_data_and_convert(data_name: str, t_splits: list = [], train_traj: int =
     final_dataset = concatenate_datasets([*datasets])
 
     # Clean up the list of datasets to free memory
-    del(datasets)
+    del datasets
 
     return final_dataset  # Return the concatenated final dataset
+
 
 # Function to shrink the trajectory length of a dataset
 def shrink_trajectory_len(dataset: Dataset, new_traj_len: int) -> Dataset:
     """
     Reshapes a dataset to shrink the trajectory length and increase the number of examples.
     This is done to optimize GPU usage when the trajectory length is too long.
-    
+
     Some factors to consider:
     - The `new_traj_len` must be at least 2 for the loss function to work.
     - The `new_traj_len` must be smaller than or equal to the original trajectory length.
@@ -104,16 +121,23 @@ def shrink_trajectory_len(dataset: Dataset, new_traj_len: int) -> Dataset:
     Args:
         dataset (Dataset): The input dataset object to reshape.
         new_traj_len (int): The new trajectory length (must be less than or equal to the original).
-    
+
     Returns:
         Dataset: The processed dataset with the reshaped trajectories.
     """
+    warnings.warn(
+        "This function is deprecated. Do not use.", DeprecationWarning, stacklevel=2
+    )
     # Get the original trajectory length from the 't' feature of the dataset
     old_traj_len = dataset.features["t"].shape[0]
 
     # Ensure the new trajectory length is valid
-    assert new_traj_len >= 2, "new_traj_len must be at least 2"  # Error if the new length is too small
-    assert old_traj_len >= new_traj_len, "new_traj_len must be smaller than the original trajectory length"
+    assert (
+        new_traj_len >= 2
+    ), "new_traj_len must be at least 2"  # Error if the new length is too small
+    assert (
+        old_traj_len >= new_traj_len
+    ), "new_traj_len must be smaller than the original trajectory length"
 
     # Store the original data type of the 't' feature for later use
     old_dtype = dataset.features["t"].dtype
@@ -123,16 +147,21 @@ def shrink_trajectory_len(dataset: Dataset, new_traj_len: int) -> Dataset:
 
     # Calculate the shrink factor (how many times the new length fits into the old length)
     shrink_factor = old_traj_len // new_traj_len
-    max_time_idx = new_traj_len * shrink_factor  # This ensures we don't exceed the original length
+    max_time_idx = (
+        new_traj_len * shrink_factor
+    )  # This ensures we don't exceed the original length
 
     # Iterate over the dataset in batches (batch_size=1 for simplicity)
     for example in dataset.iter(batch_size=1):
         # For each feature ('t', 'x', 'args'), reshape and append the data
         for col, dlist in zip(["t", "x", "args"], [ts, xs, argss]):
             arr = example[col]  # Get the data for the current feature
-            new_shape = (new_traj_len, arr.shape[-1])  # New shape for the data (length, features)
+            new_shape = (
+                new_traj_len,
+                arr.shape[-1],
+            )  # New shape for the data (length, features)
             # Slice the data and reshape it to fit the new trajectory length
-            arr_reshaped = arr[:,:max_time_idx, :].reshape(-1, *new_shape)
+            arr_reshaped = arr[:, :max_time_idx, :].reshape(-1, *new_shape)
             dlist.append(arr_reshaped)  # Append the reshaped data to the list
 
     # Concatenate the reshaped data across all examples
@@ -160,8 +189,7 @@ def shrink_trajectory_len(dataset: Dataset, new_traj_len: int) -> Dataset:
     )
 
     # Clean up the original lists and dataset to free memory
-    del(ts, xs, argss, dataset)
+    del (ts, xs, argss, dataset)
 
     # Return the reshaped dataset with the 'jax' format
     return new_dataset.with_format("jax")
-

@@ -12,12 +12,10 @@ import equinox as eqx  # Neural network framework for JAX
 
 # Import data handling utilities
 from datasets import load_dataset  # Dataset loading function
+from datasets import concatenate_datasets  # Function to concatenate datasets
 from examples.utils.data import (
-    shrink_trajectory_len,
-)  # Function to shrink trajectory length
-from examples.utils.data_temperature import (
-    pull_data_and_convert,
-)  # Function to load and convert data
+    shrink_and_concatenate,
+)  # TODO: to remove this by re-implementing training loop to respect variable length sequences
 
 # Import dynamics and models from OnsagerNet library
 from onsagernet.dynamics import OnsagerNet, SDE  # Import OnsagerNet and SDE models
@@ -34,7 +32,7 @@ from onsagernet.models import (
 # Import dataset classes for handling data
 from datasets import (
     Dataset,
-    Features,
+    Features,  # TODO: not used
     Array2D,
 )  # Import Dataset, Features, and Array2D utilities
 from onsagernet.trainers import MLETrainer  # Import MLETrainer for training
@@ -55,8 +53,7 @@ from typing import Any  # General purpose type for any object
 
 
 # Function to build the model for polymer dynamics
-def build_model(config: DictConfig, dataset: Dataset) -> SDE:
-    # TODO: dataset is *NOT* used in this function
+def build_model(config: DictConfig) -> SDE:
     """
     Builds the model for polymer dynamics using the OnsagerNet framework.
 
@@ -141,17 +138,18 @@ def train_model(config: DictConfig) -> None:
     # Load the data from the specified repository
     logger.info(f"Loading data from {config.data.repo}...")
 
-    # Retrieve trajectory length from configuration (if specified)
-    train_traj_len = config.train.get("train_traj_len", None)
+    # # Retrieve trajectory length from configuration (if specified)
+    # train_traj_len = config.train.get("train_traj_len", None)
 
-    # Pull the data and convert it to a JAX-compatible format (2D array)
-    dataset = pull_data_and_convert(
-        config.data.repo, np.atleast_1d(config.data.splits), train_traj_len
-    )
+    # Pull the data and convert it to a fix-length trajectory
+    splits = {split: split for split in config.data.splits}
+    dataset = load_dataset(config.data.repo, split=splits)
+    logger.info(f"Loaded data splits: {dataset.keys()}")
+    dataset = shrink_and_concatenate(dataset, config.train.train_traj_len)
 
     # Build the model using the configuration and dataset
     logger.info("Building model...")
-    model = build_model(config, dataset)
+    model = build_model(config)
 
     # Initialize the MLE trainer with configuration options
     trainer = MLETrainer(opt_options=config.train.opt, rop_options=config.train.rop)

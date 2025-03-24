@@ -1,7 +1,7 @@
 # Default config file for polymer dynamics (reduced coordinate case)
 
 # temperature: 1.0 # non-dim temperature set to be 1.0, varying temperature can be given in args
-dt: 0.0005
+dt: 0.0005 # TODO: get rid of explicit dt in the config file
 
 dim: 3
 # args: 2
@@ -10,24 +10,22 @@ data:
   repo:
     "MLDS-NUS/Wis_T_Reduced" # data repository
     #repo_val: "MLDS-NUS/Fs_Validation_Reduced" # validation repository
-    #splits: ["F23_10_T1"]
+    # splits: ["F23_10_T1"]
     #  splits: ["F23_10_T0_25","F23_10_T0_5","F23_10_T2_25","F23_10_T5","F23_10_T10","F23_10_T1","F1_62_T1","F1_62_T10","F1_62_T5","F1_62_T2_25","F1_62_T0_25","F1_62_T0_5","F3_92_T2_25","F0_38_T0_25","F2_31_T1","F2_78_T1","F3_93_T1","F4_63_T1","F11_60_T1","F16_20_T1","F56_00_T2_25","F5_47_T0_25"]
-    #splits: ["F23_10_T0_25","F23_10_T1","F23_10_T2_25","F23_10_T5","F1_62_T1","F1_62_T5","F1_62_T0_5","F3_92_T2_25","F4_63_T1"]
-  # TODO: This is wrong notation for YAML file. Change the list notation.
-  splits: [
-      # "Wi07_T0",
-      # "Wi07_T1",
-      # "Wi07_T2",
-      # "Wi1_T1",
-      # "Wi1_2_T1",
-      # "Wi1_7_T1",
-      # "Wi2_T1",
-      # "Wi5_T1",
-      # "Wi7_T1",
-      # "Wi10_T0",
-      "Wi10_T1",
-      # "Wi10_T2",
-    ]
+    # splits: ["F23_10_T0_25","F23_10_T1","F23_10_T2_25","F23_10_T5","F1_62_T1","F1_62_T5","F1_62_T0_5","F3_92_T2_25","F4_63_T1"]
+  splits:
+    # - Wi10_T0
+    - Wi10_T1
+    # - Wi10_T2
+    # - Wi07_T0
+    # - Wi07_T1
+    # - Wi07_T2
+    # - Wi1_T1
+    # - Wi1_2_T1
+    # - Wi1_7_T1
+    # - Wi2_T1
+    # - Wi5_T1
+    # - Wi7_T1
 model:
   seed: 0 # random seed
   potential:
@@ -53,7 +51,7 @@ model:
 
 train:
   num_epochs: 1000 # number of epochs for training the SDE
-  batch_size: 64 # each batch will be [batch_size, train_traj_len, microscopic_dim], so use a small batch size if train_traj_len is large
+  batch_size: 64 # each batch will be [batch_size, train_traj_len, dim], so use a small batch size if train_traj_len is large
   train_traj_len: 250 # can shrink the length of the training trajectories for better GPU performance
   checkpoint_every: 100 # number of epochs to check-point the model
   loss: # loss weights
