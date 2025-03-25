@@ -3,9 +3,12 @@
 import jax.numpy as jnp
 from datasets import Dataset, Features, Array2D, DatasetDict
 from datasets import concatenate_datasets
+from tqdm import tqdm
 
 
-def shrink_trajectory_len(dataset: Dataset, new_traj_len: int) -> Dataset:
+def shrink_trajectory_len(
+    dataset: Dataset, new_traj_len: int, batch_size: int = 32
+) -> Dataset:
     """Reshapes a dataset to shrink trajectory length and increase number of examples
 
     This is to optimise GPU usage when the trajectory length is too long.
@@ -18,19 +21,22 @@ def shrink_trajectory_len(dataset: Dataset, new_traj_len: int) -> Dataset:
     Args:
         dataset (Dataset): input dataset object
         new_traj_len (int): new trajectory length
+        batch_size (int, optional): Batch size for iterating through the dataset.
+            Defaults to 32. A smaller batch size may reduce memory usage but
+            increase processing time.
 
     Returns:
         Dataset: processed dataset object
     """
+    dataset.set_format("numpy")  # * iterating this is faster than using jax format
     old_traj_len = dataset[0]["t"].shape[0]
-    # old_traj_len = dataset.features["t"].shape[0]
 
     assert new_traj_len >= 2, "new_traj_len must be at least 2"
     assert (
         old_traj_len >= new_traj_len
     ), "new_traj_len must be smaller than the original trajectory length"
 
-    old_dtype = dataset.features["t"].dtype
+    old_dtype = str(dataset[0]["t"].dtype)
 
     # Iterate to load the dataset and change shage
     ts, xs, argss = [], [], []
@@ -38,7 +44,9 @@ def shrink_trajectory_len(dataset: Dataset, new_traj_len: int) -> Dataset:
     max_time_idx = (
         new_traj_len * shrink_factor
     )  # this truncates the trajectories if old_traj_len is not divisible by new_traj_len
-    for example in dataset.iter(batch_size=1):
+    for example in tqdm(
+        dataset.iter(batch_size=batch_size), total=dataset.num_rows // batch_size
+    ):
         for col, dlist in zip(["t", "x", "args"], [ts, xs, argss]):
             arr = example[col]
             new_shape = (new_traj_len, arr.shape[-1])
@@ -69,84 +77,13 @@ def shrink_trajectory_len(dataset: Dataset, new_traj_len: int) -> Dataset:
     return new_dataset.with_format("jax")
 
 
-def shrink_and_concatenate(dataset_dict: DatasetDict, new_traj_len: int):
-    """
-    Processes each split in a DatasetDict by:
-      1. Looping over all splits.
-      2. For each example, truncating each sequence (t, x, args) to an integer multiple of new_traj_len,
-         then reshaping each from shape [traj_len, feature_dim] to multiple examples of shape [new_traj_len, feature_dim].
-      3. Concatenating the processed examples from all splits into a single dataset.
-
-    This version handles the case where each feature has a different feature dimension.
-
-    Args:
-      dataset_dict (DatasetDict): A Hugging Face DatasetDict with splits.
-      new_traj_len (int): The target trajectory length (must be <= traj_len for each split).
-
-    Returns:
-      Dataset: A new concatenated dataset where each example has features:
-               - "t" of shape [new_traj_len, dim_t]
-               - "x" of shape [new_traj_len, dim_x]
-               - "args" of shape [new_traj_len, dim_args]
-    """
-
-    # # TODO: add safety check for when train_traj_len larger than the actual trajectory length
-
-    reshaped_splits = []
-
-    for split_name, ds in dataset_dict.items():
-        all_t = []
-        all_x = []
-        all_args = []
-
-        for example in ds:
-            # Convert features to numpy arrays.
-            arr_t = jnp.array(example["t"])
-            arr_x = jnp.array(example["x"])
-            arr_args = jnp.array(example["args"])
-
-            # Ensure the trajectory length is the same across all features.
-            traj_len_t, _ = arr_t.shape
-            traj_len_x, _ = arr_x.shape
-            traj_len_args, _ = arr_args.shape
-            assert (
-                traj_len_t == traj_len_x == traj_len_args
-            ), f"Trajectory lengths differ across features: {traj_len_t}, {traj_len_x}, {traj_len_args}"
-
-            traj_len = traj_len_t  # common trajectory length
-
-            # Determine the number of chunks that fit in the current trajectory.
-            factor = traj_len // new_traj_len
-            truncated_len = (
-                factor * new_traj_len
-            )  # ensure it's a multiple of new_traj_len
-
-            # Truncate the arrays.
-            arr_t_truncated = arr_t[:truncated_len, :]
-            arr_x_truncated = arr_x[:truncated_len, :]
-            arr_args_truncated = arr_args[:truncated_len, :]
-
-            # Reshape each array to split the trajectory into 'factor' chunks.
-            arr_t_reshaped = arr_t_truncated.reshape(
-                factor, new_traj_len, arr_t.shape[1]
-            )
-            arr_x_reshaped = arr_x_truncated.reshape(
-                factor, new_traj_len, arr_x.shape[1]
-            )
-            arr_args_reshaped = arr_args_truncated.reshape(
-                factor, new_traj_len, arr_args.shape[1]
-            )
-
-            # Append each new chunk as a separate example.
-            for i in range(factor):
-                all_t.append(arr_t_reshaped[i])
-                all_x.append(arr_x_reshaped[i])
-                all_args.append(arr_args_reshaped[i])
-
-        # Build a new dataset for the current split.
-        new_ds = Dataset.from_dict({"t": all_t, "x": all_x, "args": all_args})
-        reshaped_splits.append(new_ds)
-
-    # Concatenate the datasets from all splits into a single dataset.
-    combined_dataset = concatenate_datasets(reshaped_splits)
-    return combined_dataset.with_format("jax")
+def shrink_and_concatenate(
+    dataset_dict: DatasetDict, new_traj_len: int, batch_size: int = 128
+) -> Dataset:
+    concatenated_dataset = concatenate_datasets(
+        [
+            shrink_trajectory_len(dataset, new_traj_len, batch_size)
+            for _, dataset in dataset_dict.items()
+        ]
+    )
+    return concatenated_dataset.with_format("jax")

@@ -12,10 +12,7 @@ import equinox as eqx  # Neural network framework for JAX
 
 # Import data handling utilities
 from datasets import load_dataset  # Dataset loading function
-from datasets import concatenate_datasets  # Function to concatenate datasets
-from examples.utils.data import (
-    shrink_and_concatenate,
-)  # TODO: to remove this by re-implementing training loop to respect variable length sequences
+from examples.utils.data import shrink_and_concatenate
 
 # Import dynamics and models from OnsagerNet library
 from onsagernet.dynamics import OnsagerNet, SDE  # Import OnsagerNet and SDE models
@@ -143,9 +140,12 @@ def train_model(config: DictConfig) -> None:
 
     # Pull the data and convert it to a fix-length trajectory
     splits = {split: split for split in config.data.splits}
-    dataset = load_dataset(config.data.repo, split=splits)
-    logger.info(f"Loaded data splits: {dataset.keys()}")
-    dataset = shrink_and_concatenate(dataset, config.train.train_traj_len)
+    dataset_dict = load_dataset(config.data.repo, split=splits)
+    logger.info(f"Loaded data splits: {dataset_dict.keys()}")
+    logger.info("Concatenating dataset")  # TODO: add disk cache feature
+    dataset = shrink_and_concatenate(
+        dataset_dict, new_traj_len=config.train.train_traj_len
+    )
 
     # Build the model using the configuration and dataset
     logger.info("Building model...")
