@@ -20,10 +20,11 @@ from onsagernet.dynamics import OnsagerNet, SDE  # Import OnsagerNet and SDE mod
 # Import specific components from OnsagerNet models
 from onsagernet.models import (
     # PotentialResMLP,  # Model for potential energy
-    PotentialResMLPV2,  # Model for potential energy
+    PotentialResMLPV2,
     DissipationMatrixMLP,  # Model for dissipation matrix
     ConservationMatrixMLP,  # Model for conservation matrix
-    DiffusionDiagonalConstant,  # Model for diffusion constant
+    # DiffusionDiagonalConstant,  # Model for diffusion constant
+    DiffusionMLPV2,
 )
 
 # Import dataset classes for handling data
@@ -89,10 +90,13 @@ def build_model(config: DictConfig) -> SDE:
         activation=config.model.potential.activation,
         units=config.model.conservation.units,
     )
-    diffusion = DiffusionDiagonalConstant(
+    diffusion = DiffusionMLPV2(
         key=d_key,
         dim=config.dim,
+        units=config.model.diffusion.units,
+        activation=config.model.diffusion.activation,
         alpha=config.model.diffusion.alpha,
+        param_dim=config.model.diffusion.param_dim,
     )
 
     # Construct the OnsagerNet model using the individual components

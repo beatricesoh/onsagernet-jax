@@ -194,7 +194,7 @@ class PotentialResMLPV2(PotentialResMLP):
 
     def __call__(self, x: ArrayLike, args: ArrayLike) -> Array:
         if self.param_dim > 0:
-            x_and_args = jnp.concatenate([x, args[1:]], axis=0)
+            x_and_args = jnp.concatenate([x, args], axis=0)
         output_phi = super(PotentialResMLP, self).__call__(x_and_args)
         output_gamma = self.gamma_layer(x_and_args)
         output_combined = (output_phi + output_gamma) @ (output_phi + output_gamma)
@@ -352,6 +352,16 @@ class DiffusionMLP(MLP):
         if self.param_dim > 0:
             x = jnp.concatenate([x, args[1:]], axis=0)
         sigma = super().__call__(x).reshape(self.dim, self.dim)
+        sigma_squared_regularised = self.alpha * jnp.eye(self.dim) + sigma @ sigma.T
+        return jnp.linalg.cholesky(sigma_squared_regularised)
+
+
+class DiffusionMLPV2(DiffusionMLP):
+
+    def __call__(self, x, args):
+        if self.param_dim > 0:
+            x = jnp.concatenate([x, args], axis=0)
+        sigma = super(DiffusionMLP, self).__call__(x).reshape(self.dim, self.dim)
         sigma_squared_regularised = self.alpha * jnp.eye(self.dim) + sigma @ sigma.T
         return jnp.linalg.cholesky(sigma_squared_regularised)
 
