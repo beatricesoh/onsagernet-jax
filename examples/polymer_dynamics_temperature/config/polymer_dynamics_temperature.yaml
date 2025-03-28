@@ -17,15 +17,15 @@ data:
     - Wi10_T0
     - Wi10_T1
     - Wi10_T2
-    # - Wi07_T0
-    # - Wi07_T1
-    # - Wi07_T2
-    # - Wi1_T1
-    # - Wi1_2_T1
-    # - Wi1_7_T1
-    # - Wi2_T1
-    # - Wi5_T1
-    # - Wi7_T1
+    - Wi07_T0
+    - Wi07_T1
+    - Wi07_T2
+    - Wi1_T1
+    - Wi1_2_T1
+    - Wi1_7_T1
+    - Wi2_T1
+    - Wi5_T1
+    - Wi7_T1
 model:
   seed: 0 # random seed
   potential:
