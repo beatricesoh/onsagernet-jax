@@ -145,11 +145,22 @@ def train_model(config: DictConfig) -> None:
     # Pull the data and convert it to a fix-length trajectory
     splits = {split: split for split in config.data.splits}
     dataset_dict = load_dataset(config.data.repo, split=splits)
-    logger.info(f"Loaded data splits: {dataset_dict.keys()}")
+    logger.info(f"Loaded data splits:\n{', '.join(dataset_dict.keys())}")
     logger.info("Concatenating dataset")  # TODO: add disk cache feature
     dataset = shrink_and_concatenate(
         dataset_dict, new_traj_len=config.train.train_traj_len
     )
+    if config.data.get("log_transform", False):
+        logger.info("Applying log transform to Fs")
+        dataset = dataset.map(
+            lambda batch: {
+                "args": np.concatenate(
+                    [batch["args"][:, :, :1], np.log10(batch["args"][:, :, 1:2])],
+                    axis=-1,
+                )
+            },
+            batched=True,
+        )
 
     # Build the model using the configuration and dataset
     logger.info("Building model...")
