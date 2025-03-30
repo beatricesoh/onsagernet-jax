@@ -110,6 +110,26 @@ def build_model(config: DictConfig) -> SDE:
     return sde  # Return the built model
 
 
+def log_transform(data: Dataset) -> Dataset:
+    """Transforms the dataset by applying a log transformation to the second column of the 'args' field.
+
+    Args:
+        data (Dataset): Input dataset with the 'args' field.
+
+    Returns:
+        Dataset: Transformed dataset with the second column of 'args' log-transformed.
+    """
+    return data.map(
+        lambda batch: {
+            "args": np.concatenate(
+                [batch["args"][:, :, :1], np.log10(batch["args"][:, :, 1:2])],
+                axis=-1,
+            )
+        },
+        batched=True,
+    )
+
+
 # Hydra main function to start the training process
 @hydra.main(
     config_path="./config",
@@ -152,15 +172,7 @@ def train_model(config: DictConfig) -> None:
     )
     if config.data.get("log_transform", False):
         logger.info("Applying log transform to Fs")
-        dataset = dataset.map(
-            lambda batch: {
-                "args": np.concatenate(
-                    [batch["args"][:, :, :1], np.log10(batch["args"][:, :, 1:2])],
-                    axis=-1,
-                )
-            },
-            batched=True,
-        )
+        dataset = log_transform(dataset)
 
     # Build the model using the configuration and dataset
     logger.info("Building model...")
