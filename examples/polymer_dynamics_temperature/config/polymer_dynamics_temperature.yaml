@@ -7,12 +7,7 @@ dim: 3
 # args: 2
 
 data:
-  repo:
-    "MLDS-NUS/Wis_T_Reduced" # data repository
-    #repo_val: "MLDS-NUS/Fs_Validation_Reduced" # validation repository
-    # splits: ["F23_10_T1"]
-    #  splits: ["F23_10_T0_25","F23_10_T0_5","F23_10_T2_25","F23_10_T5","F23_10_T10","F23_10_T1","F1_62_T1","F1_62_T10","F1_62_T5","F1_62_T2_25","F1_62_T0_25","F1_62_T0_5","F3_92_T2_25","F0_38_T0_25","F2_31_T1","F2_78_T1","F3_93_T1","F4_63_T1","F11_60_T1","F16_20_T1","F56_00_T2_25","F5_47_T0_25"]
-    # splits: ["F23_10_T0_25","F23_10_T1","F23_10_T2_25","F23_10_T5","F1_62_T1","F1_62_T5","F1_62_T0_5","F3_92_T2_25","F4_63_T1"]
+  repo: "MLDS-NUS/Wis_T_Reduced" # data repository
   splits:
     - Wi10_T0
     - Wi10_T1
