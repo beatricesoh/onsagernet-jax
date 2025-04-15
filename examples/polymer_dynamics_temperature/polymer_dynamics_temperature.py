@@ -122,7 +122,10 @@ def log_transform(data: Dataset) -> Dataset:
     return data.map(
         lambda batch: {
             "args": np.concatenate(
-                [batch["args"][:, :, :1], np.log10(batch["args"][:, :, 1:2])],
+                [
+                    batch["args"][:, :, :1],
+                    np.log10(2000.0 * batch["args"][:, :, 1:2]),
+                ],
                 axis=-1,
             )
         },

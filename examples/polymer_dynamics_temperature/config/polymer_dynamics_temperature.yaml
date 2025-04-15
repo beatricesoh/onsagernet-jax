@@ -9,18 +9,28 @@ dim: 3
 data:
   repo: "MLDS-NUS/Wis_T_Reduced" # data repository
   splits:
-    - Wi10_T0
-    - Wi10_T1
-    - Wi10_T2
-    - Wi07_T0
-    - Wi07_T1
-    - Wi07_T2
+    - Wi0_7_T1
     - Wi1_T1
     - Wi1_2_T1
     - Wi1_7_T1
     - Wi2_T1
     - Wi5_T1
     - Wi7_T1
+    - Wi10_T1
+    - Wi0_7_T0_25
+    - Wi10_T0_25
+    - Wi3_T0_25
+    - Wi42_2_T0_25
+    - Wi1_4_T0_5
+    - Wi19_6_T0_5
+    - Wi0_7_T2_25
+    - Wi10_T2_25
+    - Wi0_3_T2_25
+    - Wi4_1_T2_25
+    - Wi0_06_T10
+    - Wi0_9_T10
+    - Wi6_4_T0_75
+    - Wi1_2_T4
 model:
   seed: 0 # random seed
   potential:
