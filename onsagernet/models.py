@@ -6,11 +6,6 @@ which are used in various examples provided in the repository.
 
 For new applications, it is suggested to try the simple models here first
 and then build upon them, adapting if necessary to the specific problem at hand.
-
-
-
-
-
 """
 
 import jax
@@ -194,11 +189,11 @@ class PotentialResMLPV2(PotentialResMLP):
 
     def __call__(self, x: ArrayLike, args: ArrayLike) -> Array:
         if self.param_dim > 0:
-            x_and_args = jnp.concatenate([x, args], axis=0)
-        output_phi = super(PotentialResMLP, self).__call__(x_and_args)
-        output_gamma = self.gamma_layer(x_and_args)
+            x = jnp.concatenate([x, args], axis=0)
+        output_phi = super(PotentialResMLP, self).__call__(x)
+        output_gamma = self.gamma_layer(x)
         output_combined = (output_phi + output_gamma) @ (output_phi + output_gamma)
-        regularisation = self.alpha * (x @ x)
+        regularisation = self.alpha * (x[: self.dim] @ x[: self.dim])
         return 0.5 * output_combined + regularisation
 
 
@@ -255,6 +250,60 @@ class DissipationMatrixMLP(MLP):
         return self.alpha * jnp.eye(self.dim) + L @ L.T
 
 
+class DissipationMatrixMLPV2(MLP):
+    """Dissipation matrix network based on a multi-layer perceptron."""
+
+    alpha: float
+    is_bounded: bool
+    dim: int
+    param_dim: int
+
+    def __init__(
+        self,
+        key: PRNGKey,
+        dim: int,
+        units: list[int],
+        activation: str,
+        alpha: float,
+        is_bounded: bool = True,
+        param_dim: int = 0,
+    ) -> None:
+        r"""Dissipation matrix network based on a multi-layer perceptron.
+
+        The MLP maps $(x, \text{args})$ of dimension `dim` + `param_dim` to a matrix $L(x,args)$ of size `dim` x `dim`,
+        and then reshapes it to a `dim` x `dim` matrix.
+        Then, the output matrix is given by
+        $$
+            M(x,args) = \alpha I + L(x,args) L(x,args)^\top.
+        $$
+        If `is_bounded` is set to `True`, then the output is element-wise bounded
+        by applying a `jax.nn.tanh` activation to the output matrix $L$.
+
+        Args:
+            key (PRNGKey): random key
+            dim (int): dimension of the input
+            units (list[int]): layer sizes
+            activation (str): activation function (can be any in `jax.nn` or custom ones defined in `onsagernet._activations`)
+            alpha (float): regulariser
+            is_bounded (bool, optional): whether to give a element-wise bounded output. Defaults to True.
+            param_dim (int, optional): dimension of the parameters. Defaults to 0.
+        """
+        self.dim = dim
+        self.param_dim = param_dim
+        units = units + [dim * dim]
+        super().__init__(key, dim + param_dim, units, activation)
+        self.alpha = alpha
+        self.is_bounded = is_bounded
+
+    def __call__(self, x: ArrayLike, args: ArrayLike) -> Array:
+        if self.param_dim > 0:
+            x = jnp.concatenate([x, args], axis=0)
+        L = super().__call__(x).reshape(self.dim, self.dim)
+        if self.is_bounded:
+            L = jax.nn.tanh(L)
+        return self.alpha * jnp.eye(self.dim) + L @ L.T
+
+
 # ------------------------------------------------------------------ #
 #                        Conservation networks                       #
 # ------------------------------------------------------------------ #
@@ -298,6 +347,56 @@ class ConservationMatrixMLP(MLP):
         self.is_bounded = is_bounded
 
     def __call__(self, x: ArrayLike) -> Array:
+        L = super().__call__(x).reshape(self.dim, self.dim)
+        if self.is_bounded:
+            L = jax.nn.tanh(L)
+        return L - L.T
+
+
+class ConservationMatrixMLPV2(MLP):
+    """Conservation matrix network based on a multi-layer perceptron with arguments."""
+
+    is_bounded: bool
+    dim: int
+    param_dim: int
+
+    def __init__(
+        self,
+        key: PRNGKey,
+        dim: int,
+        activation: str,
+        units: list[int],
+        is_bounded: bool = True,
+        param_dim: int = 0,
+    ) -> None:
+        r"""Conservation matrix network based on a multi-layer perceptron with arguments.
+
+        The MLP maps $(x, \text{args})$ of dimension `dim` + `param_dim` to a matrix $L(x, \text{args})$ of size `dim` x `dim`,
+        and then reshapes it to a `dim` x `dim` matrix.
+        Then, the output matrix is given by
+        $$
+            W(x, \text{args}) = L(x, \text{args}) - L(x, \text{args})^\top.
+        $$
+        If `is_bounded` is set to `True`, then the output is element-wise bounded
+        by applying a `jax.nn.tanh` activation to the output matrix $L$.
+
+        Args:
+            key (PRNGKey): random key
+            dim (int): dimension of the input
+            activation (str): activation function (can be any in `jax.nn` or custom ones defined in `onsagernet._activations`)
+            units (list[int]): layer sizes
+            is_bounded (bool, optional): whether to give an element-wise bounded output. Defaults to True.
+            param_dim (int, optional): dimension of the parameters. Defaults to 0.
+        """
+        self.dim = dim
+        self.param_dim = param_dim
+        units = units + [dim * dim]
+        super().__init__(key, dim + param_dim, units, activation)
+        self.is_bounded = is_bounded
+
+    def __call__(self, x: ArrayLike, args: ArrayLike) -> Array:
+        if self.param_dim > 0:
+            x = jnp.concatenate([x, args], axis=0)
         L = super().__call__(x).reshape(self.dim, self.dim)
         if self.is_bounded:
             L = jax.nn.tanh(L)

@@ -6,12 +6,12 @@ jax.config.update("jax_enable_x64", True)
 import equinox as eqx
 from datasets import load_dataset
 from examples.utils.data import shrink_and_concatenate
-from onsagernet.dynamics import OnsagerNet
+from onsagernet.dynamics import OnsagerNetV2
 
 from onsagernet.models import (
     PotentialResMLPV2,
-    DissipationMatrixMLP,
-    ConservationMatrixMLP,
+    DissipationMatrixMLPV2,
+    ConservationMatrixMLPV2,
     DiffusionMLPV2,
 )
 
@@ -52,18 +52,22 @@ def build_model(config: DictConfig) -> SDE:
         alpha=config.model.potential.alpha,
         param_dim=config.model.potential.param_dim,
     )
-    dissipation = DissipationMatrixMLP(
+    dissipation = DissipationMatrixMLPV2(
         key=m_key,
         dim=config.dim,
         units=config.model.dissipation.units,
-        activation=config.model.potential.activation,
+        activation=config.model.dissipation.activation,
         alpha=config.model.dissipation.alpha,
+        param_dim=config.model.dissipation.param_dim,
+        is_bounded=config.model.dissipation.is_bounded,
     )
-    conservation = ConservationMatrixMLP(
+    conservation = ConservationMatrixMLPV2(
         key=w_key,
         dim=config.dim,
-        activation=config.model.potential.activation,
+        activation=config.model.conservation.activation,
         units=config.model.conservation.units,
+        param_dim=config.model.conservation.param_dim,
+        is_bounded=config.model.conservation.is_bounded,
     )
     diffusion = DiffusionMLPV2(
         key=d_key,
@@ -75,7 +79,7 @@ def build_model(config: DictConfig) -> SDE:
     )
 
     # Construct the OnsagerNet model using the individual components
-    sde = OnsagerNet(
+    sde = OnsagerNetV2(
         potential=potential,
         dissipation=dissipation,
         conservation=conservation,
@@ -140,10 +144,27 @@ def train_model(config: DictConfig) -> None:
     splits = {split: split for split in config.data.splits}
     dataset_dict = load_dataset(config.data.repo, split=splits)
     logger.info(f"Loaded data splits:\n{', '.join(dataset_dict.keys())}")
-    logger.info("Concatenating dataset")  # TODO: add disk cache feature
+    logger.info("Concatenating dataset")
     dataset = shrink_and_concatenate(
         dataset_dict, new_traj_len=config.train.train_traj_len
     )
+
+    # TODO: add disk cache feature
+    # # Define cache directory path
+    # cache_dir = os.path.join(runtime_dir, "cached_dataset")
+
+    # # Check if the cache directory exists
+    # if os.path.exists(cache_dir):
+    #     logger.info("Loading dataset from cache...")
+    #     dataset = Dataset.load_from_disk(cache_dir)
+    # else:
+    #     logger.info("Processing and caching dataset...")
+    #     dataset = shrink_and_concatenate(
+    #         dataset_dict, new_traj_len=config.train.train_traj_len
+    #     )
+    #     # Save the processed dataset to cache
+    #     dataset.save_to_disk(cache_dir)
+
     if config.data.get("log_transform", False):
         logger.info("Applying log transform to Fs")
         dataset = log_transform(dataset)

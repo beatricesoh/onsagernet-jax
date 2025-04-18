@@ -275,6 +275,24 @@ class OnsagerNet(SDE):
         return jnp.sqrt(temperature) * self.diffusion_func(x, args)
 
 
+class OnsagerNetV2(OnsagerNet):
+    # TODO: Merge to OnsagerNet (and change all M and W to have args)
+
+    def drift(self, t: ArrayLike, x: ArrayLike, args: ArrayLike) -> Array:
+        """Drift function
+
+        Args:
+            t (ArrayLike): time
+            x (ArrayLike): state
+            args (ArrayLike): additional arguments or parameters, the first element is the temperature
+
+        Returns:
+            Array: drift vector field
+        """
+        dvdx = jax.grad(self.potential, argnums=0)(x, args)
+        return -(self.dissipation(x, args) + self.conservation(x, args)) @ dvdx
+
+
 # ------------------------------------------------------------------ #
 #        OnsagerNet satifying fluctuation-dissipation relation       #
 # ------------------------------------------------------------------ #
