@@ -63,7 +63,7 @@ train:
   num_epochs: 1000 # number of epochs for training the SDE
   batch_size: 64 # each batch will be [batch_size, train_traj_len, dim], so use a small batch size if train_traj_len is large
   train_traj_len: 250 # can shrink the length of the training trajectories for better GPU performance
-  checkpoint_every: 100 # number of epochs to check-point the model
+  checkpoint_every: 10 # number of epochs to check-point the model
   loss: # loss weights
     recon_weight: 1.0e-3
     compare_weight: 100.0
@@ -74,7 +74,7 @@ train:
     cooldown: 20
     factor: 0.4
     rtol: 1.0e-4
-    min_scale: 1.0e-4
+    min_scale: 1.0e-5
     accumulation_size: 2000
 
 hydra:
