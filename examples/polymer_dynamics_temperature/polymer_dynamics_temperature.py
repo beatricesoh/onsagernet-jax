@@ -1,56 +1,32 @@
-# Importing necessary libraries and modules
 import os
 import jax
 
-# Enable 64-bit precision for JAX computations
 jax.config.update("jax_enable_x64", True)
 
-# Import JAX libraries and other dependencies
-import jax.numpy as jnp
-import jax.tree_util as jtu
-import equinox as eqx  # Neural network framework for JAX
-
-# Import data handling utilities
-from datasets import load_dataset  # Dataset loading function
+import equinox as eqx
+from datasets import load_dataset
 from examples.utils.data import shrink_and_concatenate
+from onsagernet.dynamics import OnsagerNet
 
-# Import dynamics and models from OnsagerNet library
-from onsagernet.dynamics import OnsagerNet, SDE  # Import OnsagerNet and SDE models
-
-# Import specific components from OnsagerNet models
 from onsagernet.models import (
-    # PotentialResMLP,  # Model for potential energy
     PotentialResMLPV2,
-    DissipationMatrixMLP,  # Model for dissipation matrix
-    ConservationMatrixMLP,  # Model for conservation matrix
-    # DiffusionDiagonalConstant,  # Model for diffusion constant
+    DissipationMatrixMLP,
+    ConservationMatrixMLP,
     DiffusionMLPV2,
 )
 
-# Import dataset classes for handling data
-from datasets import (
-    Dataset,
-    Features,  # TODO: not used
-    Array2D,
-)  # Import Dataset, Features, and Array2D utilities
-from onsagernet.trainers import MLETrainer  # Import MLETrainer for training
+from datasets import Dataset
+from onsagernet.trainers import MLETrainer
 import numpy as np
 
-# Hydra and OmegaConf for configuration management
 import hydra
-from omegaconf import DictConfig
 import logging
-import time
 
 # ------------------------- Typing imports ------------------------- #
-# JAX specific typing for better type hinting
-from jax import Array
-from jax.typing import ArrayLike
-from datasets import Dataset  # Dataset class from datasets library
-from typing import Any  # General purpose type for any object
+from omegaconf import DictConfig
+from onsagernet.dynamics import SDE
 
 
-# Function to build the model for polymer dynamics
 def build_model(config: DictConfig) -> SDE:
     """
     Builds the model for polymer dynamics using the OnsagerNet framework.
@@ -68,7 +44,6 @@ def build_model(config: DictConfig) -> SDE:
 
     # Initialize each model component
     potential = PotentialResMLPV2(
-        # potential = PotentialResMLP(
         key=v_key,
         dim=config.dim,
         units=config.model.potential.units,
@@ -107,7 +82,7 @@ def build_model(config: DictConfig) -> SDE:
         diffusion=diffusion,
     )
 
-    return sde  # Return the built model
+    return sde
 
 
 def log_transform(data: Dataset) -> Dataset:
@@ -133,7 +108,6 @@ def log_transform(data: Dataset) -> Dataset:
     )
 
 
-# Hydra main function to start the training process
 @hydra.main(
     config_path="./config",
     config_name="polymer_dynamics_temperature",
@@ -161,9 +135,6 @@ def train_model(config: DictConfig) -> None:
 
     # Load the data from the specified repository
     logger.info(f"Loading data from {config.data.repo}...")
-
-    # # Retrieve trajectory length from configuration (if specified)
-    # train_traj_len = config.train.get("train_traj_len", None)
 
     # Pull the data and convert it to a fix-length trajectory
     splits = {split: split for split in config.data.splits}
@@ -201,6 +172,5 @@ def train_model(config: DictConfig) -> None:
     eqx.tree_serialise_leaves(os.path.join(runtime_dir, "model.eqx"), trained_model)
 
 
-# Main entry point to start the training when the script is executed
 if __name__ == "__main__":
-    train_model()  # Call the main training function
+    train_model()
