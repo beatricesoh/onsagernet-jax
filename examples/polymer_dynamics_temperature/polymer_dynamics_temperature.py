@@ -112,6 +112,27 @@ def log_transform(data: Dataset) -> Dataset:
     )
 
 
+def load_and_process_data(config: DictConfig) -> Dataset:
+    """
+    Loads and processes the dataset for training.
+
+    Args:
+        config (DictConfig): Configuration object containing data loading parameters.
+
+    Returns:
+        Dataset: Processed dataset ready for training.
+    """
+    # Load the dataset from the specified repository
+    splits = {split: split for split in config.data.splits}
+    dataset_dict = load_dataset(config.data.repo, split=splits)
+    dataset = shrink_and_concatenate(
+        dataset_dict, new_traj_len=config.train.train_traj_len
+    )
+    if config.data.get("log_transform", False):
+        dataset = log_transform(dataset)
+    return dataset
+
+
 @hydra.main(
     config_path="./config",
     config_name="polymer_dynamics_temperature",
@@ -140,34 +161,19 @@ def train_model(config: DictConfig) -> None:
     # Load the data from the specified repository
     logger.info(f"Loading data from {config.data.repo}...")
 
-    # Pull the data and convert it to a fix-length trajectory
-    splits = {split: split for split in config.data.splits}
-    dataset_dict = load_dataset(config.data.repo, split=splits)
-    logger.info(f"Loaded data splits:\n{', '.join(dataset_dict.keys())}")
-    logger.info("Concatenating dataset")
-    dataset = shrink_and_concatenate(
-        dataset_dict, new_traj_len=config.train.train_traj_len
-    )
+    cache_dir = os.path.join(os.getcwd(), "cached_dataset")
 
-    # TODO: add disk cache feature
-    # # Define cache directory path
-    # cache_dir = os.path.join(runtime_dir, "cached_dataset")
-
-    # # Check if the cache directory exists
-    # if os.path.exists(cache_dir):
-    #     logger.info("Loading dataset from cache...")
-    #     dataset = Dataset.load_from_disk(cache_dir)
-    # else:
-    #     logger.info("Processing and caching dataset...")
-    #     dataset = shrink_and_concatenate(
-    #         dataset_dict, new_traj_len=config.train.train_traj_len
-    #     )
-    #     # Save the processed dataset to cache
-    #     dataset.save_to_disk(cache_dir)
-
-    if config.data.get("log_transform", False):
-        logger.info("Applying log transform to Fs")
-        dataset = log_transform(dataset)
+    if config.data.get("cache", False):
+        if os.path.exists(cache_dir):
+            logger.info("Loading dataset from cache...")
+            dataset = Dataset.load_from_disk(cache_dir)
+        else:
+            logger.info("Processing and caching dataset...")
+            dataset = load_and_process_data(config)
+            dataset.save_to_disk(cache_dir)
+    else:
+        logger.info("Loading dataset from repository and processing...")
+        dataset = load_and_process_data(config)
 
     # Build the model using the configuration and dataset
     logger.info("Building model...")
