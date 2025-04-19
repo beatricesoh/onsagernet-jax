@@ -46,11 +46,15 @@ model:
     units:
       - 32
       - 32
+    param_dim: 2
+    is_bounded: false
   conservation:
     activation: "tanh"
     units:
       - 32
       - 32
+    param_dim: 2
+    is_bounded: false
   diffusion:
     alpha: 0.01
     units:
