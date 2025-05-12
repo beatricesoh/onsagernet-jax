@@ -404,6 +404,40 @@ class ConservationMatrixMLPV2(MLP):
 
 
 # ------------------------------------------------------------------ #
+#                         Hamiltonian networks                       #
+# ------------------------------------------------------------------ #
+class HamiltonianMLP(MLP):
+    """Hamiltonian network based on a multi-layer perceptron with arguments."""
+
+    is_bounded: bool
+    dim: int
+    param_dim: int
+
+    def __init__(
+        self,
+        key: PRNGKey,
+        dim: int,
+        activation: str,
+        units: list[int],
+        is_bounded: bool = False,
+        param_dim: int = 0,
+    ) -> None:
+        
+        self.dim = dim
+        self.param_dim = param_dim
+        units = units + [dim -1]
+        super().__init__(key, dim + param_dim, units, activation)
+        self.is_bounded = is_bounded
+
+    def __call__(self, x: ArrayLike, args: ArrayLike=None) -> Array:
+        if self.param_dim > 0:
+            x = jnp.concatenate([x, args], axis=0)
+        L = super().__call__(x)
+        if self.is_bounded:
+            L = jax.nn.tanh(L)
+        return L - L.T
+
+# ------------------------------------------------------------------ #
 #                         Diffusion networks                         #
 # ------------------------------------------------------------------ #
 
@@ -538,7 +572,7 @@ class DiffusionDiagonalConstant(eqx.Module):
         self.alpha = alpha
         self.constant_layer = ConstantLayer(dim, key)
 
-    def __call__(self, x: ArrayLike, args: ArrayLike) -> Array:
+    def __call__(self, x: ArrayLike, args: ArrayLike = None) -> Array:
         sigma_diag = self.constant_layer()
         sigma_squared_regularised = jnp.sqrt(self.alpha + sigma_diag**2)
         return jnp.diag(sigma_squared_regularised)
