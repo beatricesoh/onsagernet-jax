@@ -242,13 +242,13 @@ def train_model(config: DictConfig) -> None:
 
     # Build the model using the configuration and dataset
     logger.info("Building model...")
-    model = build_model(config)
+    model = build_HHD_model(config)
 
     # Initialize the MLE trainer with configuration options
     trainer = MLETrainer(opt_options=config.train.opt, rop_options=config.train.rop)
 
     # Start training the model using the trainer
-    logger.info(f"Training OnsagerNet for {config.train.num_epochs} epochs...")
+    logger.info(f"Training OnsagerNetHD for {config.train.num_epochs} epochs...")
     trained_model, _, _ = trainer.train(
         model=model,
         dataset=dataset,
