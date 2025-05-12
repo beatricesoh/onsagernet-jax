@@ -1,0 +1,95 @@
+# Default config file for polymer dynamics (reduced coordinate case)
+
+# temperature: 1.0 # non-dim temperature set to be 1.0, varying temperature can be given in args
+dt: 0.0005 # TODO: get rid of explicit dt in the config file
+
+dim: 3
+
+data:
+  repo: "MLDS-NUS/Wis_T_Reduced" # data repository
+  splits:
+    - Wi0_7_T1
+    - Wi1_T1
+    - Wi1_2_T1
+    - Wi1_7_T1
+    - Wi2_T1
+    - Wi5_T1
+    - Wi7_T1
+    - Wi10_T1
+    - Wi0_7_T0_25
+    - Wi10_T0_25
+    - Wi3_T0_25
+    - Wi42_2_T0_25
+    - Wi1_4_T0_5
+    - Wi19_6_T0_5
+    - Wi0_7_T2_25
+    - Wi10_T2_25
+    - Wi0_3_T2_25
+    - Wi4_1_T2_25
+    - Wi0_06_T10
+    - Wi0_9_T10
+    - Wi6_4_T0_75
+    - Wi1_2_T4
+model:
+  seed: 0 # random seed
+  potential:
+    activation: "srequ" # shifted ReQU activation
+    alpha: 0.01 # regularization strength
+    units: # layer sizes
+      - 128
+    n_pot: 32
+    param_dim: 2
+  dissipation:
+    activation: "tanh"
+    alpha: 0.01
+    units:
+      - 32
+      - 32
+    param_dim: 2
+    is_bounded: false
+  conservation:
+    activation: "tanh"
+    units:
+      - 32
+      - 32
+    param_dim: 2
+    is_bounded: false
+  hamiltonian:
+    activation: "tanh"
+    units:
+      - 128
+      - 128
+    param_dim: 2
+    is_bounded: false
+  diffusion:
+    alpha: 0.01
+    units:
+      - 32
+      - 32
+    activation: "srequ"
+    param_dim: 2
+
+train:
+  num_epochs: 1000 # number of epochs for training the SDE
+  batch_size: 64 # each batch will be [batch_size, train_traj_len, dim], so use a small batch size if train_traj_len is large
+  train_traj_len: 250 # can shrink the length of the training trajectories for better GPU performance
+  checkpoint_every: 10 # number of epochs to check-point the model
+  loss: # loss weights
+    recon_weight: 1.0e-3
+    compare_weight: 100.0
+  opt: # optimiser options
+    learning_rate: 1.0e-3
+  rop: # reduce on plateau options
+    patience: 20
+    cooldown: 20
+    factor: 0.4
+    rtol: 1.0e-4
+    min_scale: 1.0e-5
+    accumulation_size: 2000
+
+hydra:
+  run:
+    dir: ./outputs/${now:%Y_%m_%d-%H_%M_%S}
+  sweep:
+    dir: ./outputs/multirun/${now:%Y_%m_%d-%H_%M_%S}
+    subdir: ${hydra.job.num}

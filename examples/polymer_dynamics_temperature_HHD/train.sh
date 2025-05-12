@@ -1,0 +1,1 @@
+nohup bash -c "CUDA_VISIBLE_DEVICES=1 python polymer_dynamics_temperature.py" > l.file 2>&1 &
