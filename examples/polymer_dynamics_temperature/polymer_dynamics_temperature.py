@@ -179,6 +179,12 @@ def train_model(config: DictConfig) -> None:
     logger.info("Building model...")
     model = build_model(config)
 
+    # Load model if specified in the configuration
+    if config.model.get("load_model", None):
+        model_path = config.model.load_model
+        logger.info(f"Loading model from {model_path}...")
+        model = eqx.tree_deserialise_leaves(model_path, model)
+
     # Initialize the MLE trainer with configuration options
     trainer = MLETrainer(opt_options=config.train.opt, rop_options=config.train.rop)
 
