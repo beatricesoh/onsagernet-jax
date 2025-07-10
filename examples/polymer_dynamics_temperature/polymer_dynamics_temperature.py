@@ -4,7 +4,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 
 import equinox as eqx
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from examples.utils.data import shrink_and_concatenate
 from onsagernet.dynamics import OnsagerNetV2
 
@@ -124,7 +124,12 @@ def load_and_process_data(config: DictConfig) -> Dataset:
     """
     # Load the dataset from the specified repository
     splits = {split: split for split in config.data.splits}
-    dataset_dict = load_dataset(config.data.repo, split=splits)
+    if "local_repo" in config.data:
+        # If a local repository is specified, load from there
+        dataset_dict = load_from_disk(config.data.local_repo)
+    else:
+        # Otherwise, load from the remote repository
+        dataset_dict = load_dataset(config.data.repo, split=splits)
     dataset = shrink_and_concatenate(
         dataset_dict, new_traj_len=config.train.train_traj_len
     )
@@ -159,7 +164,7 @@ def train_model(config: DictConfig) -> None:
     logger = logging.getLogger(__name__)
 
     # Load the data from the specified repository
-    logger.info(f"Loading data from {config.data.repo}...")
+    # logger.info(f"Loading data from {config.data.repo}...")
 
     cache_dir = os.path.join(os.getcwd(), "cached_dataset")
 
