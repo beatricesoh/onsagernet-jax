@@ -37,8 +37,8 @@ optax = "^0.2.5"
 tqdm = "^4.67.1"
 datasets = "^4.0.0"
 scikit-image = "*"
-# jax = {extras = ["cuda12"], version = "^0.6.2"}
-jax = "^0.6.2"
+jax = {extras = ["cuda12"], version = "^0.6.2"}
+# jax = "^0.6.2"
 
 [tool.poetry.dev-dependencies]
 pytest = "^8.4.1"

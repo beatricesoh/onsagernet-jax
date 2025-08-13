@@ -116,7 +116,12 @@ class SDETrainer(ABC):
     """Base class for training SDE models."""
 
     def __init__(
-        self, opt_options: dict, rop_options: dict, loss_options: Optional[dict] = None
+        self,
+        opt_options: dict,
+        rop_options: dict,
+        loss_options: Optional[dict] = None,
+        data_augmentation: Optional[Any] = None,
+        augmentation_prob: float = 0.5
     ) -> None:
         """SDE training routine.
 
@@ -124,10 +129,14 @@ class SDETrainer(ABC):
             opt_options (dict): dictionary of options for the optimiser
             rop_options (dict): dictionary of options for the reduce-on-plateau callback
             loss_options (Optional[dict], optional): dictionary of options for loss computation. Defaults to None.
+            data_augmentation (Optional[Any], optional): data augmentation strategy. Defaults to None.
+            augmentation_prob (float): probability of applying augmentation to each batch. Defaults to 0.5.
         """
         self._opt_options = opt_options
         self._rop_options = rop_options
         self._loss_options = loss_options
+        self._data_augmentation = data_augmentation
+        self._augmentation_prob = augmentation_prob
 
     @eqx.filter_jit
     @abstractmethod
@@ -169,31 +178,69 @@ class SDETrainer(ABC):
         """
         return chain(adam(**opt_options), reduce_on_plateau(**rop_options))
 
+    def _apply_augmentation(
+        self,
+        key: jax.random.PRNGKey,
+        data_batch: tuple[ArrayLike, ArrayLike, ArrayLike]
+    ) -> tuple[ArrayLike, ArrayLike, ArrayLike]:
+        """Apply data augmentation to a batch if configured.
+
+        Args:
+            key: JAX random key
+            data_batch: Tuple of (t, x, args)
+
+        Returns:
+            Potentially augmented data batch
+        """
+        if self._data_augmentation is None:
+            return data_batch
+
+        # Randomly decide whether to apply augmentation
+        apply_key, aug_key = jax.random.split(key)
+        should_augment = jax.random.bernoulli(apply_key, self._augmentation_prob)
+
+        # Create augmentation functions that properly capture variables
+        def make_augment_fn(aug_key_captured, augmentation):
+            def augment_fn(data):
+                return augmentation(aug_key_captured, *data)
+            return augment_fn
+
+        def no_augment_fn(data):
+            return data
+
+        augment_fn = make_augment_fn(aug_key, self._data_augmentation)
+        return jax.lax.cond(should_augment, augment_fn, no_augment_fn, data_batch)
+
     @eqx.filter_jit
     def _make_step(
         self,
         model: DynamicModel,
-        data: Dataset,
+        data: tuple[ArrayLike, ArrayLike, ArrayLike],
         opt: GradientTransformation,
         opt_state: OptState,
         filter_spec: Any,
+        key: jax.random.PRNGKey,
     ) -> tuple[DynamicModel, OptState, float]:
         """Make a training step.
 
         Args:
             model (DynamicModel): the model to be trained
-            data (Dataset): the dataset object
+            data (tuple): tuple of (t, x, args) batch data
             opt (GradientTransformation): optimiser object
             opt_state (OptState): optimiser state
             filter_spec (Any): the filtering logic to determine which parts of the model to train
+            key (jax.random.PRNGKey): random key for augmentation
 
         Returns:
             tuple[DynamicModel, OptState, float]: trained model, optimiser state, loss value
         """
+        # Apply augmentation if configured
+        augmented_data = self._apply_augmentation(key, data)
+
         diff_model, static_model = eqx.partition(model, filter_spec)
 
         loss_value, grads = eqx.filter_value_and_grad(self.loss_func)(
-            diff_model, static_model, *data
+            diff_model, static_model, *augmented_data
         )
         updates, opt_state = opt.update(grads, opt_state, model, value=loss_value)
         model = eqx.apply_updates(model, updates)
@@ -207,6 +254,7 @@ class SDETrainer(ABC):
         opt: GradientTransformation,
         opt_state: OptState,
         filter_spec: Any,
+        key: jax.random.PRNGKey,
     ) -> tuple[DynamicModel, float, OptState]:
         """Train the model for an epoch.
 
@@ -217,20 +265,23 @@ class SDETrainer(ABC):
             opt (GradientTransformation): the optimiser object
             opt_state (OptState): the optimiser state
             filter_spec (Any): the filtering logic to determine which parts of the model to train
+            key (jax.random.PRNGKey): random key for augmentation
 
         Returns:
             tuple[DynamicModel, float, OptState]: trained model, loss value, optimiser state
         """
 
         step_losses = []
+        num_batches = dataset.num_rows // batch_size
+        keys = jax.random.split(key, num_batches)
 
-        for batch in tqdm(
+        for i, batch in enumerate(tqdm(
             dataset.iter(batch_size),
-            total=dataset.num_rows // batch_size,
-        ):
+            total=num_batches,
+        )):
             data_batch = (batch["t"], batch["x"], batch["args"])
             model, train_loss, opt_state = self._make_step(
-                model, data_batch, opt, opt_state, filter_spec
+                model, data_batch, opt, opt_state, filter_spec, keys[i]
             )
             step_losses.append(train_loss)
         epoch_loss = jnp.mean(jnp.array(step_losses))
@@ -247,6 +298,7 @@ class SDETrainer(ABC):
         filter_spec: Optional[Any] = None,
         checkpoint_dir: Optional[str] = None,
         checkpoint_every: Optional[int] = None,
+        rng_key: Optional[jax.random.PRNGKey] = None,
     ) -> tuple[DynamicModel, list[float], OptState]:
         """The main training routine.
 
@@ -260,6 +312,7 @@ class SDETrainer(ABC):
             filter_spec (Optional[Any], optional): the filtering logic. Defaults to None.
             checkpoint_dir (Optional[str], optional): the directory to save checkpoints. Defaults to None.
             checkpoint_every (Optional[int], optional): checkpoints are saved every `checkpoint_every` number of epochs. Defaults to None.
+            rng_key (Optional[jax.random.PRNGKey], optional): random key for augmentation. Defaults to None.
 
         Returns:
             tuple[DynamicModel, list[float], OptState]: trained model, list of losses, optimiser state
@@ -271,7 +324,12 @@ class SDETrainer(ABC):
         if filter_spec is None:
             filter_spec = tree_map(lambda _: True, model)
 
+        if rng_key is None:
+            rng_key = jax.random.PRNGKey(42)
+
         losses = []
+        keys = jax.random.split(rng_key, num_epochs)
+
         for epoch in range(num_epochs):
             model, step_loss, opt_state = self._train_epoch(
                 model=model,
@@ -280,6 +338,7 @@ class SDETrainer(ABC):
                 opt=opt,
                 opt_state=opt_state,
                 filter_spec=filter_spec,
+                key=keys[epoch],
             )
             losses.append(step_loss)
             if logger:

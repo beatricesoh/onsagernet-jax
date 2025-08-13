@@ -1,5 +1,6 @@
 import os
 import jax
+import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", True)
 
@@ -13,6 +14,12 @@ from onsagernet.models import (
     DissipationMatrixMLPV2,
     ConservationMatrixMLPV2,
     DiffusionMLPV2,
+)
+
+from onsagernet._augmentations import (
+    RandomChoiceAugmentation,
+    ReducedHeadTailFlip,
+    ReducedReflectionX
 )
 
 from datasets import Dataset
@@ -130,11 +137,14 @@ def load_and_process_data(config: DictConfig) -> Dataset:
     else:
         # Otherwise, load from the remote repository
         dataset_dict = load_dataset(config.data.repo, split=splits)
+
     dataset = shrink_and_concatenate(
         dataset_dict, new_traj_len=config.train.train_traj_len
     )
+
     if config.data.get("log_transform", False):
         dataset = log_transform(dataset)
+
     return dataset
 
 
@@ -154,19 +164,13 @@ def train_model(config: DictConfig) -> None:
     # Get the runtime directory from Hydra's configuration
     runtime_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
 
-    # Set up logger for monitoring training progress
-    log_file = os.path.join(runtime_dir, "training.log")
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[logging.FileHandler(log_file), logging.StreamHandler()],
-    )
+    # Use Hydra's default logger
     logger = logging.getLogger(__name__)
 
     # Load the data from the specified repository
-    # logger.info(f"Loading data from {config.data.repo}...")
-
-    cache_dir = os.path.join(os.getcwd(), "cached_dataset")
+    dataset_name = config.data.repo if "repo" in config.data else config.data.local_repo
+    # Clean up the dataset name for use as directory name
+    cache_dir = "cached_data_"+dataset_name.replace("/", "_").replace(":", "_")
 
     if config.data.get("cache", False):
         if os.path.exists(cache_dir):
@@ -175,7 +179,13 @@ def train_model(config: DictConfig) -> None:
         else:
             logger.info("Processing and caching dataset...")
             dataset = load_and_process_data(config)
-            dataset.save_to_disk(cache_dir)
+            logger.info(f"Caching dataset to {cache_dir}...")
+            try:
+                dataset.save_to_disk(cache_dir)
+                logger.info(f"Successfully cached dataset to {cache_dir}")
+            except Exception as e:
+                logger.error(f"Failed to cache dataset: {e}")
+                logger.info("Continuing without caching...")
     else:
         logger.info("Loading dataset from repository and processing...")
         dataset = load_and_process_data(config)
@@ -190,11 +200,35 @@ def train_model(config: DictConfig) -> None:
         logger.info(f"Loading model from {model_path}...")
         model = eqx.tree_deserialise_leaves(model_path, model)
 
+
     # Initialize the MLE trainer with configuration options
-    trainer = MLETrainer(opt_options=config.train.opt, rop_options=config.train.rop)
+    logger.info("Setting up data augmentation...")
+    ht_aug = ReducedHeadTailFlip()
+    ref_aug = ReducedReflectionX()
+    aug = RandomChoiceAugmentation([ht_aug, ref_aug])
+
+    logger.info("Configured augmentations:")
+    logger.info("  - ReducedHeadTailFlip: Flips y-coordinate [1, -1, 1]")
+    logger.info("  - ReducedReflectionX: Flips y,z-coordinates [1, -1, -1]")
+    logger.info("  - RandomChoiceAugmentation: Randomly selects one per batch")
+    logger.info(f"  - Augmentation probability: 50% of batches")
+
+    trainer = MLETrainer(
+        opt_options=config.train.opt,
+        rop_options=config.train.rop,
+        data_augmentation=aug,
+        augmentation_prob=0.5
+    )
+
+    logger.info("✅ Data augmentation is configured and ready!")
 
     # Start training the model using the trainer
     logger.info(f"Training OnsagerNet for {config.train.num_epochs} epochs...")
+    logger.info(f"Expected augmentation: ~50% of batches will be augmented")
+
+    # Create a random key for augmentation
+    training_key = jax.random.PRNGKey(config.model.get("training_seed", 123))
+
     trained_model, _, _ = trainer.train(
         model=model,
         dataset=dataset,
@@ -203,6 +237,7 @@ def train_model(config: DictConfig) -> None:
         logger=logger,
         checkpoint_dir=runtime_dir,  # Directory to save checkpoints
         checkpoint_every=config.train.checkpoint_every,  # Frequency to save checkpoints
+        rng_key=training_key,  # Provide explicit random key for augmentation
     )
 
     # Log the completion of training and save the trained model

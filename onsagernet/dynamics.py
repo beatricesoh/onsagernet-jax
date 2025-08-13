@@ -418,7 +418,7 @@ class OnsagerNetHD(SDE):
     shared: eqx.nn.Shared
     Hamiltonian: eqx.Module
     J: Array
-    
+
     def __init__(
         self, D: int, potential: eqx.Module, dissipation: eqx.Module, Hamiltonian: eqx.Module
     ) -> None:
@@ -445,9 +445,9 @@ class OnsagerNetHD(SDE):
         - $V : \mathbb{R}^{d} \to \mathbb{R}$ is the potential function
         - $\gamma : \mathbb{R}^{d} \to \mathbb{R}^{d}$ is the Helmholtz decomposition term
         - $H : \mathbb{R}^{d} \to \mathbb{R}^{d-1}$. H e^{-V} is the Hamiltonian decomposition of \gamma e^{-V}.
-        - $J_d$ is a $D\times D$ matrix with only two non-zero elements: 
+        - $J_d$ is a $D\times D$ matrix with only two non-zero elements:
             a $1$ at the position $(d, d+1)$ and a $-1$ at the position $(d+1, d)$.
-        
+
         Notice that the main difference with `OnsagerNet` is that the
         diffusion matrix is now given by a (positive semi-definite) square root of the dissipation matrix.
 
@@ -455,9 +455,9 @@ class OnsagerNetHD(SDE):
             potential (eqx.Module): potential function $V$
             dissipation (eqx.Module): dissipation matrix $M$
             Hamiltonian (eqx.Module): Hamiltonian functions $H$
-        """ 
+        """
         self.potential = potential
-        self.Hamiltonian = Hamiltonian 
+        self.Hamiltonian = Hamiltonian
 
         #define the J matrix for computing the gamma term
         self.J = jnp.zeros((D - 1, D, D))
@@ -500,8 +500,8 @@ class OnsagerNetHD(SDE):
         """
         jac_M_x = jax.jacfwd(M)(x)
         return jnp.trace(jac_M_x, axis1=1, axis2=2)
-    
-    
+
+
     def drift(self, t: ArrayLike, x: ArrayLike, args: ArrayLike) -> Array:
         """Drift function
 
@@ -551,7 +551,7 @@ class OnsagerNetHD2(SDE):
     potential: eqx.Module
     Hamiltonian: eqx.Module
     J: Array
-    
+
     def __init__(
         self, D: int, potential: eqx.Module, diffusion: eqx.Module, Hamiltonian: eqx.Module
     ) -> None:
@@ -566,7 +566,7 @@ class OnsagerNetHD2(SDE):
             \right] dt
             + \sqrt{2 \epsilon} Diff(x) dW(t)
         $$
-        
+
         $$
             M(x) = Diff(x) Diff(x)^T
         $$
@@ -582,9 +582,9 @@ class OnsagerNetHD2(SDE):
         - $V : \mathbb{R}^{d} \to \mathbb{R}$ is the potential function
         - $\gamma : \mathbb{R}^{d} \to \mathbb{R}^{d}$ is the Helmholtz decomposition term
         - $H : \mathbb{R}^{d} \to \mathbb{R}^{d-1}$. H e^{-V} is the Hamiltonian decomposition of \gamma e^{-V}.
-        - $J_d$ is a $D\times D$ matrix with only two non-zero elements: 
+        - $J_d$ is a $D\times D$ matrix with only two non-zero elements:
             a $1$ at the position $(d, d+1)$ and a $-1$ at the position $(d+1, d)$.
-        
+
         Notice that the main difference with `OnsagerNet` is that the
         diffusion matrix is now given by a (positive semi-definite) square root of the dissipation matrix.
 
@@ -592,12 +592,12 @@ class OnsagerNetHD2(SDE):
             potential (eqx.Module): potential function $V$
             diffusion (eqx.Module): diffusion function $Diff$
             Hamiltonian (eqx.Module): Hamiltonian functions $H$
-        """ 
+        """
         self.potential = potential
-        self.Hamiltonian = Hamiltonian 
+        self.Hamiltonian = Hamiltonian
 
         #define the J matrix for computing the gamma term
-        
+
         self.J = jnp.zeros((D - 1, D, D))
         for d in range(D - 1):
             self.J = self.J.at[d, d, d + 1].set(1)
@@ -639,8 +639,8 @@ class OnsagerNetHD2(SDE):
         """
         jac_M_x = jax.jacfwd(M)(x)
         return jnp.trace(jac_M_x, axis1=1, axis2=2)
-    
-    
+
+
     def drift(self, t: ArrayLike, x: ArrayLike, args: ArrayLike) -> Array:
         """Drift function
 
@@ -662,7 +662,7 @@ class OnsagerNetHD2(SDE):
         grad_H = jax.jacfwd(self.Hamiltonian, argnums=0)(x)
         gamma = jnp.einsum('dab,db->a', self.J, grad_H) - jnp.einsum('d,dab,b->a', H, self.J, dvdx)
 
-        return - dissipation(x) @ dvdx + gamma + temperature * self._matrix_div(dissipation, x) 
+        return - dissipation(x) @ dvdx + gamma + temperature * self._matrix_div(dissipation, x)
 
 
     def diffusion(self, t: ArrayLike, x: ArrayLike, args: ArrayLike) -> Array:
@@ -676,24 +676,24 @@ class OnsagerNetHD2(SDE):
         Returns:
             Array: diffusion matrix
         """
-        temperature = args[0] 
+        temperature = args[0]
         diffusion = self.shared()[1]
         return jnp.sqrt(2.0 * temperature) * diffusion(x)
-    
+
 class OnsagerNetHD2_V2(SDE):
     shared: eqx.nn.Shared
     potential: eqx.Module
     Hamiltonian: eqx.Module
-    J: Array = eqx.static_field()
-    
+    J: Array = eqx.field(static=True)
+
     def __init__(
         self, D: int, potential: eqx.Module, diffusion: eqx.Module, Hamiltonian: eqx.Module
     ) -> None:
         self.potential = potential
-        self.Hamiltonian = Hamiltonian 
+        self.Hamiltonian = Hamiltonian
 
         #define the J matrix for computing the gamma term
-        
+
         self.J = jnp.zeros((D - 1, D, D))
         for d in range(D - 1):
             self.J = self.J.at[d, d, d + 1].set(1)
@@ -735,8 +735,8 @@ class OnsagerNetHD2_V2(SDE):
         """
         jac_M_x = jax.jacfwd(M, argnums=0)(x, args)
         return jnp.trace(jac_M_x, axis1=1, axis2=2)
-    
-    
+
+
     def drift(self, t: ArrayLike, x: ArrayLike, args: ArrayLike=None) -> Array:
         """Drift function
 
@@ -758,7 +758,7 @@ class OnsagerNetHD2_V2(SDE):
         grad_H = jax.jacfwd(self.Hamiltonian, argnums=0)(x, args)
         gamma = jnp.einsum('dab,db->a', self.J, grad_H) - jnp.einsum('d,dab,b->a', H, self.J, dvdx)
 
-        return - dissipation(x, args) @ dvdx + gamma + temperature * self._matrix_div(dissipation, x, args) 
+        return - dissipation(x, args) @ dvdx + gamma + temperature * self._matrix_div(dissipation, x, args)
 
 
     def diffusion(self, t: ArrayLike, x: ArrayLike, args: ArrayLike=None) -> Array:
@@ -772,6 +772,6 @@ class OnsagerNetHD2_V2(SDE):
         Returns:
             Array: diffusion matrix
         """
-        temperature = args[0] 
+        temperature = args[0]
         diffusion = self.shared()[1]
         return jnp.sqrt(2.0 * temperature) * diffusion(x, args)

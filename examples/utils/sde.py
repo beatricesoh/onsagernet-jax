@@ -52,7 +52,7 @@ class SDEIntegrator:
         self.model = model
         self.state_dim = state_dim
         self.bm_dim = bm_dim or state_dim
-        self.method = METHOD_ALIASES.get(method)
+        self.solver = METHOD_ALIASES.get(method)()  # Get class and instantiate in one line
 
     def _build_paralle_solver(
         self,
@@ -78,10 +78,9 @@ class SDEIntegrator:
                 ODETerm(self.model.drift),
                 ControlTerm(self.model.diffusion, brownian_motion),
             )
-            solver = Euler()
             sol = diffeqsolve(
                 terms,
-                solver,
+                self.solver,  # Use pre-created solver
                 t0,
                 t1,
                 dt0=dt,

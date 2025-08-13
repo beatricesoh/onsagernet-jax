@@ -11,6 +11,9 @@ OnsagerNet and variants.
 - `onsagernet.trainers`: Training routines for SDEs and those with dimensionality transformations
 - `onsagernet.models`: Basic model definitions (mostly fully connected neural networks) that are used in references [1-3]
 
+## Data Augmentation
+- `onsagernet._augmentations`: Data augmentation strategies for SDE training
+
 ## References
 1. Chen, X. et al. Constructing custom thermodynamics using deep learning. Nature Computational Science 4, 66-85 (2024).
 2. Novoselov, K. S. & Li, Q. Learning physical laws from observations of complex dynamics. Nature Computational Science 1-2 (2024).
