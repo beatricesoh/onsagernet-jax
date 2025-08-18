@@ -7,13 +7,13 @@ jax.config.update("jax_enable_x64", True)
 import equinox as eqx
 from datasets import load_dataset, load_from_disk
 from examples.utils.data import shrink_and_concatenate
-from onsagernet.dynamics import OnsagerNetV2
+from onsagernet.dynamics import OnsagerNet
 
 from onsagernet.models import (
-    PotentialResMLPV2,
-    DissipationMatrixMLPV2,
-    ConservationMatrixMLPV2,
-    DiffusionMLPV2,
+    PotentialResMLP,
+    DissipationMatrixMLP,
+    ConservationMatrixMLP,
+    DiffusionMLP,
 )
 
 from onsagernet._augmentations import (
@@ -50,7 +50,7 @@ def build_model(config: DictConfig) -> SDE:
     v_key, m_key, w_key, d_key = jax.random.split(init_keys, 4)
 
     # Initialize each model component
-    potential = PotentialResMLPV2(
+    potential = PotentialResMLP(
         key=v_key,
         dim=config.dim,
         units=config.model.potential.units,
@@ -59,7 +59,7 @@ def build_model(config: DictConfig) -> SDE:
         alpha=config.model.potential.alpha,
         param_dim=config.model.potential.param_dim,
     )
-    dissipation = DissipationMatrixMLPV2(
+    dissipation = DissipationMatrixMLP(
         key=m_key,
         dim=config.dim,
         units=config.model.dissipation.units,
@@ -68,7 +68,7 @@ def build_model(config: DictConfig) -> SDE:
         param_dim=config.model.dissipation.param_dim,
         is_bounded=config.model.dissipation.is_bounded,
     )
-    conservation = ConservationMatrixMLPV2(
+    conservation = ConservationMatrixMLP(
         key=w_key,
         dim=config.dim,
         activation=config.model.conservation.activation,
@@ -76,7 +76,7 @@ def build_model(config: DictConfig) -> SDE:
         param_dim=config.model.conservation.param_dim,
         is_bounded=config.model.conservation.is_bounded,
     )
-    diffusion = DiffusionMLPV2(
+    diffusion = DiffusionMLP(
         key=d_key,
         dim=config.dim,
         units=config.model.diffusion.units,
@@ -86,7 +86,7 @@ def build_model(config: DictConfig) -> SDE:
     )
 
     # Construct the OnsagerNet model using the individual components
-    sde = OnsagerNetV2(
+    sde = OnsagerNet(
         potential=potential,
         dissipation=dissipation,
         conservation=conservation,
@@ -94,29 +94,6 @@ def build_model(config: DictConfig) -> SDE:
     )
 
     return sde
-
-
-def log_transform(data: Dataset) -> Dataset:
-    """Transforms the dataset by applying a log transformation to the second column of the 'args' field.
-
-    Args:
-        data (Dataset): Input dataset with the 'args' field.
-
-    Returns:
-        Dataset: Transformed dataset with the second column of 'args' log-transformed.
-    """
-    return data.map(
-        lambda batch: {
-            "args": np.concatenate(
-                [
-                    batch["args"][:, :, :1],
-                    np.log10(2000.0 * batch["args"][:, :, 1:2]),
-                ],
-                axis=-1,
-            )
-        },
-        batched=True,
-    )
 
 
 def load_and_process_data(config: DictConfig) -> Dataset:
@@ -131,8 +108,12 @@ def load_and_process_data(config: DictConfig) -> Dataset:
     """
     # Load the dataset from the specified repository
     splits = {split: split for split in config.data.splits}
-    if "local_repo" in config.data:
-        # If a local repository is specified, load from there
+    if "cache_path" in config.data:
+        # If a cache path is specified, load from cache_path_train
+        train_cache_path = f"{config.data.cache_path}_train"
+        dataset_dict = load_from_disk(train_cache_path)
+    elif "local_repo" in config.data:
+        # Backward compatibility: If a local repository is specified, load from there
         dataset_dict = load_from_disk(config.data.local_repo)
     else:
         # Otherwise, load from the remote repository
@@ -141,9 +122,6 @@ def load_and_process_data(config: DictConfig) -> Dataset:
     dataset = shrink_and_concatenate(
         dataset_dict, new_traj_len=config.train.train_traj_len
     )
-
-    if config.data.get("log_transform", False):
-        dataset = log_transform(dataset)
 
     return dataset
 
@@ -168,7 +146,13 @@ def train_model(config: DictConfig) -> None:
     logger = logging.getLogger(__name__)
 
     # Load the data from the specified repository
-    dataset_name = config.data.repo if "repo" in config.data else config.data.local_repo
+    if "cache_path" in config.data:
+        dataset_name = f"{config.data.cache_path}_train"
+    elif "local_repo" in config.data:
+        dataset_name = config.data.local_repo  # Backward compatibility
+    else:
+        dataset_name = config.data.repo
+
     # Clean up the dataset name for use as directory name
     cache_dir = "cached_data_"+dataset_name.replace("/", "_").replace(":", "_")
 
@@ -217,10 +201,8 @@ def train_model(config: DictConfig) -> None:
         opt_options=config.train.opt,
         rop_options=config.train.rop,
         data_augmentation=aug,
-        augmentation_prob=0.5
+        augmentation_prob=config.train.aug_prob,
     )
-
-    logger.info("✅ Data augmentation is configured and ready!")
 
     # Start training the model using the trainer
     logger.info(f"Training OnsagerNet for {config.train.num_epochs} epochs...")

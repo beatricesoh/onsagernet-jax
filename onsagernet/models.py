@@ -19,7 +19,7 @@ from ._layers import ConstantLayer
 
 from jax import Array
 from jax.typing import ArrayLike
-from typing import Callable
+from typing import Callable, Optional, Tuple
 from jax.random import PRNGKey
 
 
@@ -69,17 +69,67 @@ class MLP(eqx.Module):
         return output
 
 
+class ArgsConcatMixin:
+    """Mixin to centralise args selection and concatenation logic.
+
+    Classes that support selecting subsets of `args` should inherit this mixin
+    and use `self.prepare_input(x, args)` in their `__call__` implementations.
+
+    The `param_idx` attribute specifies which indices of `args` to concatenate
+    with the input `x`. If `param_idx` is None, only `x` is used as input.
+    """
+
+    param_idx: Optional[Tuple[int, ...]]
+
+    def prepare_input(self, x: ArrayLike, args: Optional[ArrayLike] = None) -> Array:
+        """Prepare input by concatenating x with selected args elements.
+
+        Args:
+            x: Primary input array
+            args: Optional array-like containing additional parameters
+
+        Returns:
+            Concatenated input array
+
+        Raises:
+            ValueError: If param_idx is set but args is None, or if indices are invalid
+        """
+        # If no params selected, return x unchanged
+        if self.param_idx is None:
+            return jnp.asarray(x)
+
+        if args is None:
+            raise ValueError("param_idx is set but args is None")
+
+        # Validate indices
+        try:
+            args_len = len(args)
+        except TypeError:
+            raise ValueError("args must be array-like with length when param_idx is set")
+
+        for i in self.param_idx:
+            if not isinstance(i, int):
+                raise ValueError(f"param_idx must contain integers, got {type(i)} at index {i}")
+            if i < 0 or i >= args_len:
+                raise ValueError(f"param_idx contains invalid index {i}, args has length {args_len}")
+
+        parts = [jnp.asarray(x)]
+        for i in self.param_idx:
+            parts.append(jnp.asarray(args[i]))
+        return jnp.concatenate(parts, axis=0)
+
+
 # ------------------------------------------------------------------ #
 #                         Potential networks                         #
 # ------------------------------------------------------------------ #
 
 
-class PotentialMLP(MLP):
+class PotentialMLP(ArgsConcatMixin, MLP):
     """Potential network based on a multi-layer perceptron."""
 
     alpha: float
     dim: int
-    param_dim: int
+    param_idx: Optional[Tuple[int, ...]]
 
     def __init__(
         self,
@@ -88,7 +138,7 @@ class PotentialMLP(MLP):
         units: list[int],
         activation: str,
         alpha: float,
-        param_dim: int = 0,
+        param_idx: Optional[Tuple[int, ...]] = None,
     ) -> None:
         r"""Potential network based on a multi-layer perceptron.
 
@@ -96,7 +146,7 @@ class PotentialMLP(MLP):
         $$
             V(x, args) = \alpha \|(x, args)\|^2 + \text{MLP}(x, args)
         $$
-        where $x$ is the input and $u$ are additional parameters.
+        where $x$ is the input and selected elements from $args$ are additional parameters.
         The constant $\alpha \geq 0$ is a regularisation term,
         which gives a quadratic growth to ensure that the potential is integrable.
         We are tacitly assuming that MLP is of sub-quadratic growth,
@@ -109,28 +159,30 @@ class PotentialMLP(MLP):
             units (list[int]): layer sizes
             activation (str): activation function (can be any in `jax.nn` or custom ones defined in `onsagernet._activations`)
             alpha (float): regulariser
-            param_dim (int, optional): dimensions of the parameters (excluding temperature which is always the first parameter). Defaults to 0.
+            param_idx (tuple, optional): indices of args elements to include as input.
+                If None, only x is used. If (0,), includes args[0]. If (1,2), includes args[1] and args[2].
+                Defaults to None.
         """
         self.dim = dim
         units = units + [1]
-        self.param_dim = param_dim
-        super().__init__(key, dim + param_dim, units, activation)
+        self.param_idx = param_idx
+        input_dim = dim if param_idx is None else dim + len(param_idx)
+        super().__init__(key, input_dim, units, activation)
         self.alpha = alpha
 
     def __call__(self, x: ArrayLike, args: ArrayLike) -> Array:
-        if self.param_dim > 0:
-            x = jnp.concatenate([x, args[1:]], axis=0)
+        x = self.prepare_input(x, args)
         output = super().__call__(x) + self.alpha * (x @ x)
         return jnp.squeeze(output)
 
 
-class PotentialResMLP(MLP):
+class PotentialResMLP(ArgsConcatMixin, MLP):
     r"""Potential network with a residual connection."""
 
     alpha: float
     gamma_layer: eqx.nn.Linear
     dim: int
-    param_dim: int
+    param_idx: Optional[Tuple[int, ...]]
 
     def __init__(
         self,
@@ -140,7 +192,7 @@ class PotentialResMLP(MLP):
         activation: str,
         n_pot: int,
         alpha: float,
-        param_dim: int = 0,
+        param_idx: Optional[Tuple[int, ...]] = None,
     ) -> None:
         r"""Potential network with a residual connection.
 
@@ -152,8 +204,8 @@ class PotentialResMLP(MLP):
         $$
         where
 
-        - $\phi$ is a MLP of dim + param_dim -> n_pot
-        - $\Gamma$ ia matrix of size [n_pot, dim + para_dim]
+        - $\phi$ is a MLP of dim + param_idx -> n_pot
+        - $\Gamma$ ia matrix of size [n_pot, dim + len(param_idx)]
         - $\alpha > 0$ is a scalar regulariser
 
         Args:
@@ -163,33 +215,23 @@ class PotentialResMLP(MLP):
             activation (str): activation function (can be any in `jax.nn` or custom ones defined in `onsagernet._activations`)
             n_pot (int): size of the MLP part of the potential
             alpha (float): regulariser
-            param_dim (int, optional): dimension of the parameters. Defaults to 0.
+            param_idx (tuple, optional): indices of args elements to include as input.
+                If None, only x is used. If (0,), includes args[0]. If (1,2), includes args[1] and args[2].
+                Defaults to None.
         """
         self.dim = dim
-        self.param_dim = param_dim
+        self.param_idx = param_idx
         units = units + [n_pot]
         mlp_key, gamma_key = jax.random.split(key)
-        super().__init__(mlp_key, dim + param_dim, units, activation)
+        input_dim = dim if param_idx is None else dim + len(param_idx)
+        super().__init__(mlp_key, input_dim, units, activation)
         self.alpha = alpha
         self.gamma_layer = eqx.nn.Linear(
-            dim + param_dim, n_pot, key=gamma_key, use_bias=False
+            input_dim, n_pot, key=gamma_key, use_bias=False
         )
 
     def __call__(self, x: ArrayLike, args: ArrayLike) -> Array:
-        if self.param_dim > 0:
-            x = jnp.concatenate([x, args[1:]], axis=0)
-        output_phi = super().__call__(x)
-        output_gamma = self.gamma_layer(x)
-        output_combined = (output_phi + output_gamma) @ (output_phi + output_gamma)
-        regularisation = self.alpha * (x @ x)
-        return 0.5 * output_combined + regularisation
-
-
-class PotentialResMLPV2(PotentialResMLP):
-
-    def __call__(self, x: ArrayLike, args: ArrayLike) -> Array:
-        if self.param_dim > 0:
-            x = jnp.concatenate([x, args], axis=0)
+        x = self.prepare_input(x, args)
         output_phi = super(PotentialResMLP, self).__call__(x)
         output_gamma = self.gamma_layer(x)
         output_combined = (output_phi + output_gamma) @ (output_phi + output_gamma)
@@ -202,12 +244,13 @@ class PotentialResMLPV2(PotentialResMLP):
 # ------------------------------------------------------------------ #
 
 
-class DissipationMatrixMLP(MLP):
+class DissipationMatrixMLP(ArgsConcatMixin, MLP):
     """Dissipation matrix network based on a multi-layer perceptron."""
 
     alpha: float
     is_bounded: bool
     dim: int
+    param_idx: Optional[Tuple[int, ...]]
 
     def __init__(
         self,
@@ -217,60 +260,11 @@ class DissipationMatrixMLP(MLP):
         activation: str,
         alpha: float,
         is_bounded: bool = True,
+        param_idx: Optional[Tuple[int, ...]] = None,
     ) -> None:
         r"""Dissipation matrix network based on a multi-layer perceptron.
 
-        The MLP maps $x$ of dimension `dim` to a matrix $L(x)$ of size `dim` x `dim`,
-        and then reshapes it to a `dim` x `dim` matrix.
-        Then, the output matrix is given by
-        $$
-            M(x) = \alpha I + L(x) L(x)^\top.
-        $$
-        If `is_bounded` is set to `True`, then the output is element-wise bounded
-        by applying a `jax.nn.tanh` activation to the output matrix $L$.
-
-        Args:
-            key (PRNGKey): random key
-            dim (int): dimension of the input
-            units (list[int]): layer sizes
-            activation (str): activation function (can be any in `jax.nn` or custom ones defined in `onsagernet._activations`)
-            alpha (float): regulariser
-            is_bounded (bool, optional): whether to give a element-wise bounded output. Defaults to True.
-        """
-        self.dim = dim
-        units = units + [dim * dim]
-        super().__init__(key, dim, units, activation)
-        self.alpha = alpha
-        self.is_bounded = is_bounded
-
-    def __call__(self, x: ArrayLike) -> Array:
-        L = super().__call__(x).reshape(self.dim, self.dim)
-        if self.is_bounded:
-            L = jax.nn.tanh(L)
-        return self.alpha * jnp.eye(self.dim) + L @ L.T
-
-
-class DissipationMatrixMLPV2(MLP):
-    """Dissipation matrix network based on a multi-layer perceptron."""
-
-    alpha: float
-    is_bounded: bool
-    dim: int
-    param_dim: int
-
-    def __init__(
-        self,
-        key: PRNGKey,
-        dim: int,
-        units: list[int],
-        activation: str,
-        alpha: float,
-        is_bounded: bool = True,
-        param_dim: int = 0,
-    ) -> None:
-        r"""Dissipation matrix network based on a multi-layer perceptron.
-
-        The MLP maps $(x, \text{args})$ of dimension `dim` + `param_dim` to a matrix $L(x,args)$ of size `dim` x `dim`,
+        The MLP maps input to a matrix $L$ of size `dim` x `dim`,
         and then reshapes it to a `dim` x `dim` matrix.
         Then, the output matrix is given by
         $$
@@ -286,18 +280,20 @@ class DissipationMatrixMLPV2(MLP):
             activation (str): activation function (can be any in `jax.nn` or custom ones defined in `onsagernet._activations`)
             alpha (float): regulariser
             is_bounded (bool, optional): whether to give a element-wise bounded output. Defaults to True.
-            param_dim (int, optional): dimension of the parameters. Defaults to 0.
+            param_idx (tuple, optional): indices of args elements to include as input.
+                If None, only x is used. If (0,), includes args[0]. If (1,2), includes args[1] and args[2].
+                Defaults to None.
         """
         self.dim = dim
-        self.param_dim = param_dim
+        self.param_idx = param_idx
         units = units + [dim * dim]
-        super().__init__(key, dim + param_dim, units, activation)
+        input_dim = dim if param_idx is None else dim + len(param_idx)
+        super().__init__(key, input_dim, units, activation)
         self.alpha = alpha
         self.is_bounded = is_bounded
 
     def __call__(self, x: ArrayLike, args: ArrayLike) -> Array:
-        if self.param_dim > 0:
-            x = jnp.concatenate([x, args], axis=0)
+        x = self.prepare_input(x, args)
         L = super().__call__(x).reshape(self.dim, self.dim)
         if self.is_bounded:
             L = jax.nn.tanh(L)
@@ -309,56 +305,12 @@ class DissipationMatrixMLPV2(MLP):
 # ------------------------------------------------------------------ #
 
 
-class ConservationMatrixMLP(MLP):
-    """Conservation matrix network based on a multi-layer perceptron."""
-
-    is_bounded: bool
-    dim: int
-
-    def __init__(
-        self,
-        key: PRNGKey,
-        dim: int,
-        activation: str,
-        units: list[int],
-        is_bounded: bool = True,
-    ) -> None:
-        r"""Conservation matrix network based on a multi-layer perceptron.
-
-        The MLP maps $x$ of dimension `dim` to a matrix $L(x)$ of size `dim` x `dim`,
-        and then reshapes it to a `dim` x `dim` matrix.
-        Then, the output matrix is given by
-        $$
-            W(x) = L(x) - L(x)^\top.
-        $$
-        If `is_bounded` is set to `True`, then the output is element-wise bounded
-        by applying a `jax.nn.tanh` activation to the output matrix $L$.
-
-        Args:
-            key (PRNGKey): random key
-            dim (int): dimension of the input
-            activation (str): activation function (can be any in `jax.nn` or custom ones defined in `onsagernet._activations`)
-            units (list[int]): layer sizes
-            is_bounded (bool, optional): whether to give a element-wise bounded output. Defaults to True.
-        """
-        self.dim = dim
-        units = units + [dim * dim]
-        super().__init__(key, dim, units, activation)
-        self.is_bounded = is_bounded
-
-    def __call__(self, x: ArrayLike) -> Array:
-        L = super().__call__(x).reshape(self.dim, self.dim)
-        if self.is_bounded:
-            L = jax.nn.tanh(L)
-        return L - L.T
-
-
-class ConservationMatrixMLPV2(MLP):
+class ConservationMatrixMLP(ArgsConcatMixin, MLP):
     """Conservation matrix network based on a multi-layer perceptron with arguments."""
 
     is_bounded: bool
     dim: int
-    param_dim: int
+    param_idx: Optional[Tuple[int, ...]]
 
     def __init__(
         self,
@@ -367,11 +319,11 @@ class ConservationMatrixMLPV2(MLP):
         activation: str,
         units: list[int],
         is_bounded: bool = True,
-        param_dim: int = 0,
+        param_idx: Optional[Tuple[int, ...]] = None,
     ) -> None:
         r"""Conservation matrix network based on a multi-layer perceptron with arguments.
 
-        The MLP maps $(x, \text{args})$ of dimension `dim` + `param_dim` to a matrix $L(x, \text{args})$ of size `dim` x `dim`,
+        The MLP maps input to a matrix $L$ of size `dim` x `dim`,
         and then reshapes it to a `dim` x `dim` matrix.
         Then, the output matrix is given by
         $$
@@ -386,17 +338,19 @@ class ConservationMatrixMLPV2(MLP):
             activation (str): activation function (can be any in `jax.nn` or custom ones defined in `onsagernet._activations`)
             units (list[int]): layer sizes
             is_bounded (bool, optional): whether to give an element-wise bounded output. Defaults to True.
-            param_dim (int, optional): dimension of the parameters. Defaults to 0.
+            param_idx (tuple, optional): indices of args elements to include as input.
+                If None, only x is used. If (0,), includes args[0]. If (1,2), includes args[1] and args[2].
+                Defaults to None.
         """
         self.dim = dim
-        self.param_dim = param_dim
+        self.param_idx = param_idx
         units = units + [dim * dim]
-        super().__init__(key, dim + param_dim, units, activation)
+        input_dim = dim if param_idx is None else dim + len(param_idx)
+        super().__init__(key, input_dim, units, activation)
         self.is_bounded = is_bounded
 
     def __call__(self, x: ArrayLike, args: ArrayLike) -> Array:
-        if self.param_dim > 0:
-            x = jnp.concatenate([x, args], axis=0)
+        x = self.prepare_input(x, args)
         L = super().__call__(x).reshape(self.dim, self.dim)
         if self.is_bounded:
             L = jax.nn.tanh(L)
@@ -406,12 +360,14 @@ class ConservationMatrixMLPV2(MLP):
 # ------------------------------------------------------------------ #
 #                         Hamiltonian networks                       #
 # ------------------------------------------------------------------ #
-class HamiltonianMLP(MLP):
+
+
+class HamiltonianMLP(ArgsConcatMixin, MLP):
     """Hamiltonian network based on a multi-layer perceptron with arguments."""
 
     is_bounded: bool
     dim: int
-    param_dim: int
+    param_idx: Optional[Tuple[int, ...]]
 
     def __init__(
         self,
@@ -420,18 +376,29 @@ class HamiltonianMLP(MLP):
         activation: str,
         units: list[int],
         is_bounded: bool = False,
-        param_dim: int = 0,
+        param_idx: Optional[Tuple[int, ...]] = None,
     ) -> None:
-        
+        """Hamiltonian network based on a multi-layer perceptron.
+
+        Args:
+            key (PRNGKey): random key
+            dim (int): dimension of the input
+            activation (str): activation function
+            units (list[int]): layer sizes
+            is_bounded (bool, optional): whether to apply tanh activation. Defaults to False.
+            param_idx (tuple, optional): indices of args elements to include as input.
+                If None, only x is used. If (0,), includes args[0]. If (1,2), includes args[1] and args[2].
+                Defaults to None.
+        """
         self.dim = dim
-        self.param_dim = param_dim
-        units = units + [dim -1]
-        super().__init__(key, dim + param_dim, units, activation)
+        self.param_idx = param_idx
+        units = units + [dim - 1]
+        input_dim = dim if param_idx is None else dim + len(param_idx)
+        super().__init__(key, input_dim, units, activation)
         self.is_bounded = is_bounded
 
     def __call__(self, x: ArrayLike, args: ArrayLike=None) -> Array:
-        if self.param_dim > 0:
-            x = jnp.concatenate([x, args], axis=0)
+        x = self.prepare_input(x, args)
         L = super().__call__(x)
         if self.is_bounded:
             L = jax.nn.tanh(L)
@@ -442,12 +409,12 @@ class HamiltonianMLP(MLP):
 # ------------------------------------------------------------------ #
 
 
-class DiffusionMLP(MLP):
+class DiffusionMLP(ArgsConcatMixin, MLP):
     """Diffusion matrix network based on a multi-layer perceptron."""
 
     alpha: float
     dim: int
-    param_dim: int
+    param_idx: Optional[Tuple[int, ...]]
 
     def __init__(
         self,
@@ -456,7 +423,7 @@ class DiffusionMLP(MLP):
         units: list[int],
         activation: str,
         alpha: float,
-        param_dim: int = 0,
+        param_idx: Optional[Tuple[int, ...]] = None,
     ) -> None:
         r"""Diffusion matrix network based on a multi-layer perceptron.
 
@@ -465,7 +432,7 @@ class DiffusionMLP(MLP):
             \sigma(x, args) = \text{Chol}(\alpha I + \text{MLP}(x, args))
         $$
         where $\text{Chol}$ is the Cholesky decomposition.
-        Here, MLP maps $(x, args)$ of dimension `dim` + `param_dim` to a matrix of size `dim` x `dim`,
+        Here, MLP maps input to a matrix of size `dim` x `dim`.
 
         Args:
             key (PRNGKey): random key
@@ -473,38 +440,30 @@ class DiffusionMLP(MLP):
             units (list[int]): layer sizes
             activation (str): activation function (can be any in `jax.nn` or custom ones defined in `onsagernet._activations`)
             alpha (float): regulariser
-            param_dim (int, optional): dimension of the parameters. Defaults to 0.
+            param_idx (tuple, optional): indices of args elements to include as input.
+                If None, only x is used. If (0,), includes args[0]. If (1,2), includes args[1] and args[2].
+                Defaults to None.
         """
         self.dim = dim
-        self.param_dim = param_dim
+        self.param_idx = param_idx
         units = units + [dim * dim]
-        super().__init__(key, dim + param_dim, units, activation)
+        input_dim = dim if param_idx is None else dim + len(param_idx)
+        super().__init__(key, input_dim, units, activation)
         self.alpha = alpha
 
-    def __call__(self, x: ArrayLike, args: ArrayLike) -> Array:
-        if self.param_dim > 0:
-            x = jnp.concatenate([x, args[1:]], axis=0)
-        sigma = super().__call__(x).reshape(self.dim, self.dim)
-        sigma_squared_regularised = self.alpha * jnp.eye(self.dim) + sigma @ sigma.T
-        return jnp.linalg.cholesky(sigma_squared_regularised)
-
-
-class DiffusionMLPV2(DiffusionMLP):
-
     def __call__(self, x, args):
-        if self.param_dim > 0:
-            x = jnp.concatenate([x, args], axis=0)
+        x = self.prepare_input(x, args)
         sigma = super(DiffusionMLP, self).__call__(x).reshape(self.dim, self.dim)
         sigma_squared_regularised = self.alpha * jnp.eye(self.dim) + sigma @ sigma.T
         return jnp.linalg.cholesky(sigma_squared_regularised)
 
 
-class DiffusionDiagonalMLP(MLP):
+class DiffusionDiagonalMLP(ArgsConcatMixin, MLP):
     """Diagonal diffusion matrix network based on a multi-layer perceptron."""
 
     alpha: float
     dim: int
-    param_dim: int
+    param_idx: Optional[Tuple[int, ...]]
 
     def __init__(
         self,
@@ -513,7 +472,7 @@ class DiffusionDiagonalMLP(MLP):
         units: list[int],
         activation: str,
         alpha: float,
-        param_dim: int = 0,
+        param_idx: Optional[Tuple[int, ...]] = None,
     ) -> None:
         r"""Diagonal diffusion matrix network based on a multi-layer perceptron.
 
@@ -521,7 +480,7 @@ class DiffusionDiagonalMLP(MLP):
         $$
             \sigma(x, args) = \text{diag}(\alpha + \text{MLP}(x, args)^2)^{\frac{1}{2}}.
         $$
-        Here, MLP maps $(x, args)$ of dimension `dim` + `param_dim` to a vector of size `dim`.
+        Here, MLP maps input to a vector of size `dim`.
 
         Args:
             key (PRNGKey): random key
@@ -529,17 +488,19 @@ class DiffusionDiagonalMLP(MLP):
             units (list[int]): layer sizes
             activation (str): activation function (can be any in `jax.nn` or custom ones defined in `onsagernet._activations`)
             alpha (float): regulariser
-            param_dim (int, optional): dimension of the parameters. Defaults to 0.
+            param_idx (tuple, optional): indices of args elements to include as input.
+                If None, only x is used. If (0,), includes args[0]. If (1,2), includes args[1] and args[2].
+                Defaults to None.
         """
         self.dim = dim
-        self.param_dim = param_dim
+        self.param_idx = param_idx
         units = units + [dim]
-        super().__init__(key, dim + param_dim, units, activation)
+        input_dim = dim if param_idx is None else dim + len(param_idx)
+        super().__init__(key, input_dim, units, activation)
         self.alpha = alpha
 
     def __call__(self, x: ArrayLike, args: ArrayLike) -> Array:
-        if self.param_dim > 0:
-            x = jnp.concatenate([x, args[1:]], axis=0)
+        x = self.prepare_input(x, args)
         sigma_diag = super().__call__(x)
         sigma_diag_regularised = jnp.sqrt(self.alpha + sigma_diag**2)
         return jnp.diag(sigma_diag_regularised)

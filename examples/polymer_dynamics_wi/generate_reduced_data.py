@@ -1,9 +1,37 @@
 from datasets import load_dataset, load_from_disk, concatenate_datasets, DatasetDict, Dataset
 import jax
-import argparse
+import hydra
+from omegaconf import DictConfig
 import jax.numpy as jnp
 import numpy as np
 from tqdm import tqdm
+
+
+# --------------------------------------------------------------------
+#  Log transformation for args data
+# --------------------------------------------------------------------
+
+def log_transform_dataset(data: Dataset) -> Dataset:
+    """Transforms the dataset by applying a log transformation to the second column of the 'args' field.
+
+    Args:
+        data (Dataset): Input dataset with the 'args' field.
+
+    Returns:
+        Dataset: Transformed dataset with the second column of 'args' log-transformed.
+    """
+    return data.map(
+        lambda batch: {
+            "args": np.concatenate(
+                [
+                    batch["args"][:, :, :1],
+                    np.log10(2000.0 * batch["args"][:, :, 1:2]),
+                ],
+                axis=-1,
+            )
+        },
+        batched=True,
+    )
 
 
 # --------------------------------------------------------------------
@@ -174,41 +202,18 @@ def process_and_sample_data(dataset_name, batch_size=32, num_bins=32, samples_pe
     return x_data
 
 
-if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser(description="Combined PCA processing and data transformation")
-    parser.add_argument("--pca-source-dataset", type=str, required=True,
-                        help="Source dataset for PCA fitting (e.g., MLDS-NUS/Fs_Paramsweep)")
-    parser.add_argument("--train-dataset", type=str, default="MLDS-NUS/Fs_Paramsweep",
-                        help="Dataset to use for training data transformation (default: 'MLDS-NUS/Fs_Paramsweep')")
-    parser.add_argument("--test-dataset", type=str, default="MLDS-NUS/Fs_Holdout",
-                        help="Dataset to use for test data transformation (default: 'MLDS-NUS/Fs_Holdout')")
-    parser.add_argument("--suffix", type=str, default="",
-                        help="Suffix to add to output directory names")
-    parser.add_argument("--batch-size", type=int, default=32,
-                        help="Batch size for processing PCA source data (default: 32)")
-    parser.add_argument("--num-bins", type=int, default=32,
-                        help="Number of bins for stratified sampling by extension (default: 32)")
-    parser.add_argument("--samples-per-batch", type=int, default=64,
-                        help="Number of samples to select per batch (default: 64)")
-    parser.add_argument("--flip-test", action="store_true", default=False,
-                        help="Flip test data dimensions: reshape [NUM_STEPS, 900] -> [NUM_STEPS, 3, 300] -> transpose last 2 dims -> [NUM_STEPS, 300, 3] -> reshape to [NUM_STEPS, 900] (default: False)")
-    parser.add_argument("--skip-train", action="store_true", default=False,
-                        help="Skip processing training data (default: False)")
-    parser.add_argument("--skip-test", action="store_true", default=False,
-                        help="Skip processing test data (default: False)")
-    args = parser.parse_args()
-
+@hydra.main(version_base=None, config_path="config", config_name="polymer_dynamics_wi")
+def main(cfg: DictConfig) -> None:
     # Step 1: Process and sample data for PCA fitting
     print("=" * 60)
     print("STEP 1: DATA PROCESSING AND SAMPLING")
     print("=" * 60)
 
     X = process_and_sample_data(
-        args.pca_source_dataset,
-        batch_size=args.batch_size,
-        num_bins=args.num_bins,
-        samples_per_batch=args.samples_per_batch
+        cfg.data.generation.pca_source,
+        batch_size=cfg.data.generation.batch_size,
+        num_bins=cfg.data.generation.num_bins,
+        samples_per_batch=cfg.data.generation.samples_per_batch
     )
 
     # Step 2: Build PCA components
@@ -288,21 +293,25 @@ if __name__ == "__main__":
     # Initialize variables for final summary
     train_output_path = None
     test_output_path = None
-    suffix = f"_{args.suffix}" if args.suffix else ""
 
     # Process train dataset first (if not skipped)
-    if args.skip_train:
-        print("⏭️  Skipping training data processing (--skip-train enabled)")
+    if cfg.data.generation.skip_train:
+        print("⏭️  Skipping training data processing (skip_train enabled)")
     else:
-        print(f"Loading and transforming train data from: {args.train_dataset}")
-        train_data = load_dataset(args.train_dataset).with_format("numpy")
+        print(f"Loading and transforming train data from: {cfg.data.generation.train_dataset}")
+        train_data = load_dataset(cfg.data.generation.train_dataset).with_format("numpy")
+
+        # Apply log transformation if enabled
+        if cfg.data.generation.log_transform:
+            print("Applying log transformation to train data...")
+            train_data = log_transform_dataset(train_data)
 
         # Processing train data
         print("Processing train data...")
         train_data_pca = train_data.map(lambda x: {"x": transform_vmap(x["x"])})
 
         # Save train data immediately and release memory
-        train_output_path = f"pca_train{suffix}"
+        train_output_path = f"{cfg.data.cache_path}_train"
         print(f"Saving train data to: {train_output_path}")
         train_data_pca.save_to_disk(train_output_path)
 
@@ -311,14 +320,19 @@ if __name__ == "__main__":
         print("✓ Train data processed and saved, memory released")
 
     # Now process test dataset (if not skipped)
-    if args.skip_test:
-        print("\n⏭️  Skipping test data processing (--skip-test enabled)")
+    if cfg.data.generation.skip_test:
+        print("\n⏭️  Skipping test data processing (skip_test enabled)")
     else:
-        print(f"\nLoading and transforming test data from: {args.test_dataset}")
-        test_data = load_dataset(args.test_dataset).with_format("numpy")
+        print(f"\nLoading and transforming test data from: {cfg.data.generation.test_dataset}")
+        test_data = load_dataset(cfg.data.generation.test_dataset).with_format("numpy")
+
+        # Apply log transformation if enabled
+        if cfg.data.generation.log_transform:
+            print("Applying log transformation to test data...")
+            test_data = log_transform_dataset(test_data)
 
         # Define test data transformation function based on flip flag
-        if args.flip_test:
+        if cfg.data.generation.flip_test:
             print("🔄 Flip mode enabled: Will reorder test data dimensions before transformation")
             print("   [NUM_STEPS, 900] -> [NUM_STEPS, 3, 300] -> transpose -> [NUM_STEPS, 300, 3] -> [NUM_STEPS, 900]")
 
@@ -338,7 +352,7 @@ if __name__ == "__main__":
         test_data_pca = test_data.map(transform_test_data)
 
         # Save test data
-        test_output_path = f"pca_test{suffix}"
+        test_output_path = f"{cfg.data.cache_path}_test"
         print(f"Saving test data to: {test_output_path}")
         test_data_pca.save_to_disk(test_output_path)
 
@@ -349,7 +363,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("PROCESSING COMPLETE")
     print("=" * 60)
-    print(f"PCA fitted on sampled data from {args.pca_source_dataset}")
+    print(f"PCA fitted on sampled data from {cfg.data.generation.pca_source}")
 
     if train_output_path:
         print(f"Train data transformed and saved to: {train_output_path}")
@@ -358,7 +372,7 @@ if __name__ == "__main__":
 
     if test_output_path:
         print(f"Test data transformed and saved to: {test_output_path}")
-        if args.flip_test:
+        if cfg.data.generation.flip_test:
             print("🔄 Test data processed with dimension reordering enabled")
     else:
         print("Test data processing skipped")
@@ -366,3 +380,7 @@ if __name__ == "__main__":
     print(f"Transform: [extension, PC-1_whitened, PC-2_whitened]")
     print(f"PC variance ratio: {lams[0]/lams[1]:.3f}")
     print("Memory optimized: datasets processed sequentially to minimize peak usage")
+
+
+if __name__ == "__main__":
+    main()
