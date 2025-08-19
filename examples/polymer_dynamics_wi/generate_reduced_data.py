@@ -5,11 +5,16 @@ from omegaconf import DictConfig
 import jax.numpy as jnp
 import numpy as np
 from tqdm import tqdm
+import logging
+import hashlib
+import os
+from pathlib import Path
 
 
 # --------------------------------------------------------------------
 #  Log transformation for args data
 # --------------------------------------------------------------------
+
 
 def log_transform_dataset(data: Dataset) -> Dataset:
     """Transforms the dataset by applying a log transformation to the second column of the 'args' field.
@@ -25,7 +30,7 @@ def log_transform_dataset(data: Dataset) -> Dataset:
             "args": np.concatenate(
                 [
                     batch["args"][:, :, :1],
-                    np.log10(2000.0 * batch["args"][:, :, 1:2]),
+                    np.log10(batch["args"][:, :, 1:2]),
                 ],
                 axis=-1,
             )
@@ -134,12 +139,85 @@ def get_extension(x):
     return extension
 
 
+# --------------------------------------------------------------------
+#  PCA caching functionality using HuggingFace datasets
+# --------------------------------------------------------------------
+
+def get_pca_cache_key(cfg: DictConfig) -> str:
+    """Generate a unique cache key based on PCA configuration parameters."""
+    cache_params = {
+        'pca_source': cfg.data.generation.pca_source,
+        'batch_size': cfg.data.generation.batch_size,
+        'num_bins': cfg.data.generation.num_bins,
+        'samples_per_batch': cfg.data.generation.samples_per_batch,
+    }
+    cache_string = str(sorted(cache_params.items()))
+    return hashlib.md5(cache_string.encode()).hexdigest()[:16]
+
+def get_pca_cache_path(cfg: DictConfig) -> Path:
+    """Get the cache directory path for PCA data."""
+    cache_key = get_pca_cache_key(cfg)
+    cache_dir = Path("pca_cache") / f"pca_data_{cache_key}"
+    return cache_dir
+
+def save_pca_cache(cfg: DictConfig, X: np.ndarray):
+    """Save PCA data using HuggingFace datasets."""
+    cache_path = get_pca_cache_path(cfg)
+
+    try:
+        # Convert numpy array to HuggingFace dataset
+        dataset = Dataset.from_dict({"x": X})
+        dataset.save_to_disk(str(cache_path))
+        logging.info(f"PCA data cached to: {cache_path}")
+    except Exception as e:
+        logging.warning(f"Failed to cache PCA data: {e}")
+
+def load_pca_cache(cfg: DictConfig) -> np.ndarray:
+    """Load PCA data from cache if available."""
+    cache_path = get_pca_cache_path(cfg)
+
+    if not cache_path.exists():
+        logging.info("No PCA cache found")
+        return None
+
+    try:
+        # Load dataset from cache
+        dataset = load_from_disk(str(cache_path))
+        X = np.array(dataset["x"])
+        logging.info(f"Loading PCA data from cache: {cache_path}")
+        return X
+
+    except Exception as e:
+        logging.warning(f"Failed to load PCA cache: {e}")
+        return None
+
+def clear_pca_cache(cfg: DictConfig):
+    """Clear PCA cache files."""
+    cache_path = get_pca_cache_path(cfg)
+    if cache_path.exists():
+        import shutil
+        shutil.rmtree(cache_path)
+        logging.info(f"Cleared PCA cache: {cache_path}")
+
+    # Also clear any old cache directories
+    cache_dir = Path("pca_cache")
+    if cache_dir.exists():
+        for cache_subdir in cache_dir.glob("pca_data_*"):
+            if cache_subdir.is_dir():
+                try:
+                    import shutil
+                    shutil.rmtree(cache_subdir)
+                    logging.info(f"Cleared old cache directory: {cache_subdir}")
+                except Exception as e:
+                    logging.warning(f"Failed to clear cache directory {cache_subdir}: {e}")
+
+
 def process_and_sample_data(dataset_name, batch_size=32, num_bins=32, samples_per_batch=64):
     """
     Load dataset and perform stratified sampling by extension lengths
     Memory-optimized version that processes data in streaming fashion
     """
-    print(f"Loading and processing data from: {dataset_name}")
+    logging.info(f"Loading and processing data from: {dataset_name}")
 
     # Load the specified dataset
     data = load_dataset(dataset_name).with_format("numpy")
@@ -194,60 +272,81 @@ def process_and_sample_data(dataset_name, batch_size=32, num_bins=32, samples_pe
         # Periodic memory cleanup and progress reporting
         if (batch_idx + 1) % 100 == 0:
             current_samples = sum(len(chunk) for chunk in x_data)
-            print(f"  Processed {batch_idx + 1}/{total_batches} batches, collected {current_samples} samples")
+            logging.info(f"  Processed {batch_idx + 1}/{total_batches} batches, collected {current_samples} samples")
 
     # Final concatenation
     x_data = np.concatenate(x_data, axis=0)
-    print(f"Processed and sampled {len(x_data)} samples for PCA fitting")
+    logging.info(f"Processed and sampled {len(x_data)} samples for PCA fitting")
     return x_data
 
 
 @hydra.main(version_base=None, config_path="config", config_name="polymer_dynamics_wi")
 def main(cfg: DictConfig) -> None:
-    # Step 1: Process and sample data for PCA fitting
-    print("=" * 60)
-    print("STEP 1: DATA PROCESSING AND SAMPLING")
-    print("=" * 60)
+    # Setup logging
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    X = process_and_sample_data(
-        cfg.data.generation.pca_source,
-        batch_size=cfg.data.generation.batch_size,
-        num_bins=cfg.data.generation.num_bins,
-        samples_per_batch=cfg.data.generation.samples_per_batch
-    )
+    # Handle cache clearing if requested
+    if cfg.data.generation.get('cache_pca_data', False) and cfg.data.generation.get('clear_pca_cache', False):
+        logging.info("Clearing PCA cache as requested...")
+        clear_pca_cache(cfg)
 
-    # Step 2: Build PCA components
-    print("\n" + "=" * 60)
-    print("STEP 2: PCA FITTING")
-    print("=" * 60)
+    # Step 1: Load or generate PCA sampled data
+    logging.info("=" * 60)
+    logging.info("STEP 1: PCA DATA SAMPLING")
+    logging.info("=" * 60)
+
+    X = None
+
+    # Try to load from cache first if caching is enabled
+    if cfg.data.generation.get('cache_pca_data', False):
+        logging.info("Attempting to load PCA data from cache...")
+        X = load_pca_cache(cfg)
+
+    # If not cached or caching disabled, process data
+    if X is None:
+        logging.info("Processing and sampling data for PCA fitting...")
+        X = process_and_sample_data(
+            cfg.data.generation.pca_source,
+            batch_size=cfg.data.generation.batch_size,
+            num_bins=cfg.data.generation.num_bins,
+            samples_per_batch=cfg.data.generation.samples_per_batch
+        )
+
+        # Cache the sampled data if caching is enabled
+        if cfg.data.generation.get('cache_pca_data', False):
+            save_pca_cache(cfg, X)
+    else:
+        logging.info("Using cached PCA sampled data")
+
+    # Step 2: Build PCA components from the data
+    logging.info("\n" + "=" * 60)
+    logging.info("STEP 2: PCA FITTING")
+    logging.info("=" * 60)
 
     X_jax = jnp.array(X)
-    # Release the numpy array to save memory
-    del X
-
     P, mu, encode, lams = build_two_PCs(X_jax)
 
-    print("PCA DIAGNOSTICS")
-    print("-" * 40)
-    print(f"PC-1 eigenvalue (variance): {lams[0]:.6f}")
-    print(f"PC-2 eigenvalue (variance): {lams[1]:.6f}")
-    print(f"Variance ratio (PC-1/PC-2): {lams[0]/lams[1]:.6f}")
-    print(f"Whitening scales: [{1.0/jnp.sqrt(lams[0]):.6f}, {1.0/jnp.sqrt(lams[1]):.6f}]")
+    logging.info("PCA DIAGNOSTICS")
+    logging.info("-" * 40)
+    logging.info(f"PC-1 eigenvalue (variance): {lams[0]:.6f}")
+    logging.info(f"PC-2 eigenvalue (variance): {lams[1]:.6f}")
+    logging.info(f"Variance ratio (PC-1/PC-2): {lams[0]/lams[1]:.6f}")
+    logging.info(f"Whitening scales: [{1.0/jnp.sqrt(lams[0]):.6f}, {1.0/jnp.sqrt(lams[1]):.6f}]")
 
     # Test encoder on PCA fitting data
-    print("\n--- Testing encoder on PCA fitting data ---")
+    logging.info("\n--- Testing encoder on PCA fitting data ---")
     all_projected = encode(X_jax)
-    print(f"PCA data shape: {X_jax.shape}")
-    print(f"Projected shape: {all_projected.shape}")
+    logging.info(f"PCA data shape: {X_jax.shape}")
+    logging.info(f"Projected shape: {all_projected.shape}")
 
     # Check if whitening actually works
     pc1_var = jnp.var(all_projected[:, 0])
     pc2_var = jnp.var(all_projected[:, 1])
-    print(f"PC-1 variance after whitening: {pc1_var:.6f} (should be ~1.0)")
-    print(f"PC-2 variance after whitening: {pc2_var:.6f} (should be ~1.0)")
+    logging.info(f"PC-1 variance after whitening: {pc1_var:.6f} (should be ~1.0)")
+    logging.info(f"PC-2 variance after whitening: {pc2_var:.6f} (should be ~1.0)")
 
     # Release PCA fitting data after validation
-    del X_jax, all_projected
+    del X, X_jax, all_projected
 
     # Step 3: Define transformation functions
     def get_extension_transform(x):
@@ -258,34 +357,47 @@ def main(cfg: DictConfig) -> None:
     def pca_projection(x):
         return encode(x).ravel()
 
-    def flip_test_data_ordering(x):
-        """
-        Flip test data dimensions:
-        [NUM_STEPS, 900] -> [NUM_STEPS, 3, 300] -> transpose last 2 dims -> [NUM_STEPS, 300, 3] -> [NUM_STEPS, 900]
-        """
-        # x shape: [NUM_STEPS, 900]
-        num_steps = x.shape[0]
-
-        # Reshape to [NUM_STEPS, 3, 300]
-        x_reshaped = x.reshape(num_steps, 3, 300)
-
-        # Transpose last 2 dimensions to get [NUM_STEPS, 300, 3]
-        x_transposed = jnp.transpose(x_reshaped, (0, 2, 1))
-
-        # Reshape back to [NUM_STEPS, 900]
-        x_flipped = x_transposed.reshape(num_steps, 900)
-
-        return x_flipped
-
     def transform(x):
         z_star = get_extension_transform(x)
         z_hat = pca_projection(x)
-        return jnp.concatenate([jnp.array([z_star]), z_hat])
+
+        # Handle arg transformations based on config
+        args_values = jnp.concatenate([jnp.array([z_star]), z_hat])
+
+        arg_transform = cfg.data.generation.get('arg_transform', None)
+        if arg_transform == "log":
+            # Apply log transformation to the second element (keeping first unchanged)
+            args_values = jnp.concatenate([
+                args_values[:1],  # Keep first element unchanged
+                jnp.log10(args_values[1:])  # Log transform the rest
+            ])
+        elif arg_transform == "scale":
+            # Apply scaling to the second element onwards
+            scale_factor = cfg.data.generation.get('scale_factor', 1.0)
+            args_values = jnp.concatenate([
+                args_values[:1],  # Keep first element unchanged
+                args_values[1:] * scale_factor  # Scale the rest
+            ])
+
+        return args_values
 
     # Step 4: Transform train and test datasets
-    print("\n" + "=" * 60)
-    print("STEP 3: DATASET TRANSFORMATION")
-    print("=" * 60)
+    logging.info("\n" + "=" * 60)
+    logging.info("STEP 3: DATASET TRANSFORMATION")
+    logging.info("=" * 60)
+
+    # Log transformation settings
+    arg_transform = cfg.data.generation.get('arg_transform', None)
+    if arg_transform:
+        if arg_transform == "log":
+            logging.info("Args transformation: LOG (applying log10 to PCA components)")
+        elif arg_transform == "scale":
+            scale_factor = cfg.data.generation.get('scale_factor', 1.0)
+            logging.info(f"Args transformation: SCALE (factor: {scale_factor} to PCA components)")
+        else:
+            logging.info(f"Args transformation: {arg_transform} (unknown, will be ignored)")
+    else:
+        logging.info("Args transformation: NONE")
 
     # Apply transformation
     transform_vmap = jax.vmap(transform)
@@ -296,90 +408,71 @@ def main(cfg: DictConfig) -> None:
 
     # Process train dataset first (if not skipped)
     if cfg.data.generation.skip_train:
-        print("⏭️  Skipping training data processing (skip_train enabled)")
+        logging.info("⏭️  Skipping training data processing (skip_train enabled)")
     else:
-        print(f"Loading and transforming train data from: {cfg.data.generation.train_dataset}")
+        logging.info(f"Loading and transforming train data from: {cfg.data.generation.train_dataset}")
         train_data = load_dataset(cfg.data.generation.train_dataset).with_format("numpy")
 
-        # Apply log transformation if enabled
-        if cfg.data.generation.log_transform:
-            print("Applying log transformation to train data...")
-            train_data = log_transform_dataset(train_data)
-
         # Processing train data
-        print("Processing train data...")
+        logging.info("Processing train data...")
         train_data_pca = train_data.map(lambda x: {"x": transform_vmap(x["x"])})
 
         # Save train data immediately and release memory
         train_output_path = f"{cfg.data.cache_path}_train"
-        print(f"Saving train data to: {train_output_path}")
+        logging.info(f"Saving train data to: {train_output_path}")
         train_data_pca.save_to_disk(train_output_path)
 
         # Release train data memory
         del train_data, train_data_pca
-        print("✓ Train data processed and saved, memory released")
+        logging.info("✓ Train data processed and saved, memory released")
 
     # Now process test dataset (if not skipped)
     if cfg.data.generation.skip_test:
-        print("\n⏭️  Skipping test data processing (skip_test enabled)")
+        logging.info("\n⏭️  Skipping test data processing (skip_test enabled)")
     else:
-        print(f"\nLoading and transforming test data from: {cfg.data.generation.test_dataset}")
+        logging.info(f"\nLoading and transforming test data from: {cfg.data.generation.test_dataset}")
         test_data = load_dataset(cfg.data.generation.test_dataset).with_format("numpy")
 
-        # Apply log transformation if enabled
-        if cfg.data.generation.log_transform:
-            print("Applying log transformation to test data...")
-            test_data = log_transform_dataset(test_data)
-
-        # Define test data transformation function based on flip flag
-        if cfg.data.generation.flip_test:
-            print("🔄 Flip mode enabled: Will reorder test data dimensions before transformation")
-            print("   [NUM_STEPS, 900] -> [NUM_STEPS, 3, 300] -> transpose -> [NUM_STEPS, 300, 3] -> [NUM_STEPS, 900]")
-
-            def transform_test_data(batch):
-                # First flip the data ordering
-                x_flipped = flip_test_data_ordering(batch["x"])
-                # Then apply the usual transformation
-                return {"x": transform_vmap(x_flipped)}
-        else:
-            print("📋 Standard mode: Applying transformation without dimension reordering")
-
-            def transform_test_data(batch):
-                return {"x": transform_vmap(batch["x"])}
-
         # Processing test data
-        print("Processing test data...")
-        test_data_pca = test_data.map(transform_test_data)
+        logging.info("Processing test data...")
+        test_data_pca = test_data.map(lambda x: {"x": transform_vmap(x["x"])})
 
         # Save test data
         test_output_path = f"{cfg.data.cache_path}_test"
-        print(f"Saving test data to: {test_output_path}")
+        logging.info(f"Saving test data to: {test_output_path}")
         test_data_pca.save_to_disk(test_output_path)
 
         # Release test data memory
         del test_data, test_data_pca
-        print("✓ Test data processed and saved, memory released")
+        logging.info("✓ Test data processed and saved, memory released")
 
-    print("\n" + "=" * 60)
-    print("PROCESSING COMPLETE")
-    print("=" * 60)
-    print(f"PCA fitted on sampled data from {cfg.data.generation.pca_source}")
+    logging.info("\n" + "=" * 60)
+    logging.info("PROCESSING COMPLETE")
+    logging.info("=" * 60)
+    logging.info(f"PCA fitted on sampled data from {cfg.data.generation.pca_source}")
 
     if train_output_path:
-        print(f"Train data transformed and saved to: {train_output_path}")
+        logging.info(f"Train data transformed and saved to: {train_output_path}")
     else:
-        print("Train data processing skipped")
+        logging.info("Train data processing skipped")
 
     if test_output_path:
-        print(f"Test data transformed and saved to: {test_output_path}")
-        if cfg.data.generation.flip_test:
-            print("🔄 Test data processed with dimension reordering enabled")
+        logging.info(f"Test data transformed and saved to: {test_output_path}")
     else:
-        print("Test data processing skipped")
+        logging.info("Test data processing skipped")
 
-    print(f"Transform: [extension, PC-1_whitened, PC-2_whitened]")
-    print(f"PC variance ratio: {lams[0]/lams[1]:.3f}")
-    print("Memory optimized: datasets processed sequentially to minimize peak usage")
+    logging.info(f"Transform: [extension, PC-1_whitened, PC-2_whitened]")
+    logging.info(f"PC variance ratio: {lams[0]/lams[1]:.3f}")
+
+    # Report args transformation
+    arg_transform = cfg.data.generation.get('arg_transform', None)
+    if arg_transform == "log":
+        logging.info("Args transformation: log10 applied to PCA components")
+    elif arg_transform == "scale":
+        scale_factor = cfg.data.generation.get('scale_factor', 1.0)
+        logging.info(f"Args transformation: scaling by factor {scale_factor} applied to PCA components")
+    else:
+        logging.info("Args transformation: none")
 
 
 if __name__ == "__main__":
