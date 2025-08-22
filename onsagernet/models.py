@@ -102,21 +102,25 @@ class ArgsConcatMixin:
             raise ValueError("param_idx is set but args is None")
 
         # Validate indices
-        try:
-            args_len = len(args)
-        except TypeError:
-            raise ValueError("args must be array-like with length when param_idx is set")
+        args_array = jnp.asarray(args)
+        if args_array.ndim == 0:
+            raise ValueError("args must be array-like with at least one dimension when param_idx is set")
+
+        # Get the size of the last dimension (parameter dimension)
+        args_len = args_array.shape[-1]
 
         for i in self.param_idx:
             if not isinstance(i, int):
                 raise ValueError(f"param_idx must contain integers, got {type(i)} at index {i}")
             if i < 0 or i >= args_len:
-                raise ValueError(f"param_idx contains invalid index {i}, args has length {args_len}")
+                raise ValueError(f"param_idx contains invalid index {i}, args has shape {args_array.shape}")
 
         parts = [jnp.asarray(x)]
         for i in self.param_idx:
-            parts.append(jnp.asarray(args[i]))
-        return jnp.concatenate(parts, axis=0)
+            # Preserve shape by using indexing that keeps dimensions
+            arg_part = jnp.asarray(args[..., i:i+1])  # Keep the last dimension
+            parts.append(arg_part)
+        return jnp.concatenate(parts, axis=-1)
 
 
 # ------------------------------------------------------------------ #

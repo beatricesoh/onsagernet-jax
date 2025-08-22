@@ -57,7 +57,7 @@ def build_model(config: DictConfig) -> SDE:
         activation=config.model.potential.activation,
         n_pot=config.model.potential.n_pot,
         alpha=config.model.potential.alpha,
-        param_dim=config.model.potential.param_dim,
+        param_idx=config.model.potential.param_idx,
     )
     dissipation = DissipationMatrixMLP(
         key=m_key,
@@ -65,7 +65,7 @@ def build_model(config: DictConfig) -> SDE:
         units=config.model.dissipation.units,
         activation=config.model.dissipation.activation,
         alpha=config.model.dissipation.alpha,
-        param_dim=config.model.dissipation.param_dim,
+        param_idx=config.model.dissipation.param_idx,
         is_bounded=config.model.dissipation.is_bounded,
     )
     conservation = ConservationMatrixMLP(
@@ -73,7 +73,7 @@ def build_model(config: DictConfig) -> SDE:
         dim=config.dim,
         activation=config.model.conservation.activation,
         units=config.model.conservation.units,
-        param_dim=config.model.conservation.param_dim,
+        param_idx=config.model.conservation.param_idx,
         is_bounded=config.model.conservation.is_bounded,
     )
     diffusion = DiffusionMLP(
@@ -82,7 +82,7 @@ def build_model(config: DictConfig) -> SDE:
         units=config.model.diffusion.units,
         activation=config.model.diffusion.activation,
         alpha=config.model.diffusion.alpha,
-        param_dim=config.model.diffusion.param_dim,
+        param_idx=config.model.diffusion.param_idx,
     )
 
     # Construct the OnsagerNet model using the individual components
@@ -128,7 +128,7 @@ def load_and_process_data(config: DictConfig) -> Dataset:
 
 @hydra.main(
     config_path="./config",
-    config_name="polymer_dynamics_temperature",
+    config_name="polymer_dynamics_wi",
     version_base=None,
 )
 def train_model(config: DictConfig) -> None:
@@ -154,7 +154,7 @@ def train_model(config: DictConfig) -> None:
         dataset_name = config.data.repo
 
     # Clean up the dataset name for use as directory name
-    cache_dir = "cached_data_"+dataset_name.replace("/", "_").replace(":", "_")
+    cache_dir = "cached_data_"+dataset_name.replace("/", "_").replace(":", "_")  # TODO: remove these cache
 
     if config.data.get("cache", False):
         if os.path.exists(cache_dir):
