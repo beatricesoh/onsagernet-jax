@@ -247,10 +247,20 @@ def main(config: DictConfig) -> None:
     def pca_projection(x):
         return encode(x).ravel()
 
-    def transform(x):
+    # ------------------ Main transformation functions ----------------- #
+
+    def transform_x(x):
         z_star = get_extension_transform(x)
         z_hat = pca_projection(x)
         return jnp.concatenate([jnp.array([z_star]), z_hat])
+
+    def transform_args(args):
+        if config.data.generation.arg_transform == "log":
+            return jnp.concatenate([args[0:1], jnp.log10(args[1:2])])
+        elif config.data.generation.arg_transform == "scale":
+            return args * jnp.array([1.0, config.data.generation.scale_factor])
+        else:
+            return args
 
     # Step 4: Transform train and test datasets
     logging.info("\n" + "=" * 60)
@@ -258,7 +268,8 @@ def main(config: DictConfig) -> None:
     logging.info("=" * 60)
 
     # Apply transformation
-    transform_vmap = jax.vmap(transform)
+    transform_x_vmap = jax.vmap(transform_x)
+    transform_args_vmap = jax.vmap(transform_args)
 
     # Initialize variables for final summary
     train_output_path = None
@@ -266,7 +277,12 @@ def main(config: DictConfig) -> None:
 
     # Main transformation function
     def transform_dataset(dataset):
-        return dataset.map(lambda x: {"x": transform_vmap(x["x"])})
+        return dataset.map(
+            lambda batch: {
+                "x": transform_x_vmap(batch["x"]),
+                "args": transform_args_vmap(batch["args"])
+            }
+        )
 
     # Process train dataset first (if not skipped)
     if config.data.generation.skip_train:
