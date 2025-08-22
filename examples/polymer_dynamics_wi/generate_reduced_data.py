@@ -1,4 +1,4 @@
-from datasets import load_dataset, load_from_disk, concatenate_datasets, DatasetDict, Dataset
+from datasets import load_dataset, concatenate_datasets
 import jax
 import hydra
 from omegaconf import DictConfig
@@ -8,9 +8,11 @@ from tqdm import tqdm
 import logging
 
 
-# --------------------------------------------------------------------
-#  Build two symmetry-constrained principal components
-# --------------------------------------------------------------------
+
+# ------------------------------------------------------------------ #
+#         Build two symmetry-constrained principal components        #
+# ------------------------------------------------------------------ #
+
 
 # ---- symmetry operators (inter-leaved layout) ----------------------
 def make_ops(n=300):
@@ -27,11 +29,14 @@ def make_ops(n=300):
     Tz = jnp.eye(3*n).at[idx_z, idx_z].set(-1)
     return I, R, Tx, Ty, Tz
 
-I, R, Tx, Ty, Tz = make_ops()
-
 # ---- projector for a given character --------------------------------
-def projector(chR, chTx, chTy, chTz):
-    ops = [I, R, Tx, Ty, Tz,
+def projector(chR, chTx, chTy, chTz, ops=None):
+    if ops is None:
+        I, R, Tx, Ty, Tz = make_ops()
+    else:
+        I, R, Tx, Ty, Tz = ops
+
+    ops_list = [I, R, Tx, Ty, Tz,
            R@Tx, R@Ty, R@Tz,
            Tx@Ty, Tx@Tz, Ty@Tz,
            R@Tx@Ty, R@Tx@Tz, R@Ty@Tz, Tx@Ty@Tz,
@@ -44,18 +49,14 @@ def projector(chR, chTx, chTy, chTz):
         chR*chTx*chTy, chR*chTx*chTz, chR*chTy*chTz, chTx*chTy*chTz,
         chR*chTx*chTy*chTz
     ]
-    return 0.0625 * sum(s*o for s, o in zip(signs, ops))  # 1/16 factor
-
-# projectors for the two sectors
-P1 = projector(chR=-1, chTx=-1, chTy=+1, chTz=+1)   # PC-1
-P2 = projector(chR=+1, chTx=-1, chTy=+1, chTz=+1)   # PC-2
+    return 0.0625 * sum(s*o for s, o in zip(signs, ops_list))  # 1/16 factor
 
 # ---- dominant eigenvector of a symmetric matrix ---------------------
 def top_eigvec(S):
     vals, vecs = jnp.linalg.eigh(S)          # ascending order
     v = vecs[:, -1]
-    λ = vals[-1]
-    return v, λ
+    lam = vals[-1]
+    return v, lam
 
 # ---- main builder ----------------------------------------------------
 def build_two_PCs(X, eps=1e-12):
@@ -64,6 +65,11 @@ def build_two_PCs(X, eps=1e-12):
     X  : (N, 900) flattened chains, inter-leaved (x1,y1,z1,…)
     returns  P (2×900), mu (1×900), encode callable, eigenvalues
     """
+    # Create projectors for the two sectors
+    ops = make_ops()
+    P1 = projector(chR=-1, chTx=-1, chTy=+1, chTz=+1, ops=ops)   # PC-1
+    P2 = projector(chR=+1, chTx=-1, chTy=+1, chTz=+1, ops=ops)   # PC-2
+
     # centre with Tx-even mean  (zero x-mean)
     mu = X.mean(axis=0, keepdims=True)
     mu = mu.at[:, 0::3].set(0.0)
@@ -84,17 +90,17 @@ def build_two_PCs(X, eps=1e-12):
 
     # Compute actual variances by projecting the data
     raw_projected = (P @ Xc.T).T  # Project centered data
-    λ1 = jnp.var(raw_projected[:, 0])  # Actual variance of PC-1
-    λ2 = jnp.var(raw_projected[:, 1])  # Actual variance of PC-2
+    lam1 = jnp.var(raw_projected[:, 0])  # Actual variance of PC-1
+    lam2 = jnp.var(raw_projected[:, 1])  # Actual variance of PC-2
 
     # Whitening: divide by square root of variances
-    whitening_scale = 1.0 / jnp.sqrt(jnp.array([λ1, λ2]))
+    whitening_scale = 1.0 / jnp.sqrt(jnp.array([lam1, lam2]))
 
     def encode(X_new):
         projected = (P @ (X_new - mu).T).T       # (N,2)
         return projected * whitening_scale       # Apply whitening
 
-    return P, mu, encode, (λ1, λ2)
+    return P, mu, encode, (lam1, lam2)
 
 
 # --------------------------------------------------------------------
@@ -108,105 +114,16 @@ def get_extension(x):
     return extension
 
 
-# --------------------------------------------------------------------
-#  PCA caching functionality
-# --------------------------------------------------------------------
-
-def get_pca_cache_key(cfg: DictConfig) -> str:
-    """Generate a unique cache key based on PCA configuration parameters."""
-    cache_params = {
-        'pca_source': cfg.data.generation.pca_source,
-        'batch_size': cfg.data.generation.batch_size,
-        'num_bins': cfg.data.generation.num_bins,
-        'samples_per_batch': cfg.data.generation.samples_per_batch,
-    }
-    cache_string = str(sorted(cache_params.items()))
-    return hashlib.md5(cache_string.encode()).hexdigest()[:16]
-
-def get_pca_cache_path(cfg: DictConfig) -> Path:
-    """Get the cache file path for PCA data and components."""
-    cache_key = get_pca_cache_key(cfg)
-    cache_dir = Path("pca_cache")
-    cache_dir.mkdir(exist_ok=True)
-    return cache_dir / f"pca_data_{cache_key}.pkl"
-
-def save_pca_cache(cfg: DictConfig, X: np.ndarray, pca_components: tuple):
-    """Save PCA data and components to cache."""
-    cache_path = get_pca_cache_path(cfg)
-    cache_data = {
-        'X': X,
-        'pca_components': pca_components,
-        'config_params': {
-            'pca_source': cfg.data.generation.pca_source,
-            'batch_size': cfg.data.generation.batch_size,
-            'num_bins': cfg.data.generation.num_bins,
-            'samples_per_batch': cfg.data.generation.samples_per_batch,
-        }
-    }
-    
-    try:
-        with open(cache_path, 'wb') as f:
-            pickle.dump(cache_data, f)
-        logging.info(f"PCA data and components cached to: {cache_path}")
-    except Exception as e:
-        logging.warning(f"Failed to cache PCA data: {e}")
-
-def load_pca_cache(cfg: DictConfig) -> tuple:
-    """Load PCA data and components from cache if available."""
-    cache_path = get_pca_cache_path(cfg)
-    
-    if not cache_path.exists():
-        logging.info("No PCA cache found")
-        return None, None
-    
-    try:
-        with open(cache_path, 'rb') as f:
-            cache_data = pickle.load(f)
-        
-        # Verify configuration matches
-        cached_params = cache_data['config_params']
-        current_params = {
-            'pca_source': cfg.data.generation.pca_source,
-            'batch_size': cfg.data.generation.batch_size,
-            'num_bins': cfg.data.generation.num_bins,
-            'samples_per_batch': cfg.data.generation.samples_per_batch,
-        }
-        
-        if cached_params == current_params:
-            logging.info(f"Loading PCA data from cache: {cache_path}")
-            return cache_data['X'], cache_data['pca_components']
-        else:
-            logging.info("PCA cache parameters don't match current config")
-            return None, None
-            
-    except Exception as e:
-        logging.warning(f"Failed to load PCA cache: {e}")
-        return None, None
-
-def clear_pca_cache(cfg: DictConfig):
-    """Clear PCA cache files."""
-    cache_path = get_pca_cache_path(cfg)
-    if cache_path.exists():
-        cache_path.unlink()
-        logging.info(f"Cleared PCA cache: {cache_path}")
-    
-    # Also clear any old cache files
-    cache_dir = Path("pca_cache")
-    if cache_dir.exists():
-        for cache_file in cache_dir.glob("pca_data_*.pkl"):
-            try:
-                cache_file.unlink()
-                logging.info(f"Cleared old cache file: {cache_file}")
-            except Exception as e:
-                logging.warning(f"Failed to clear cache file {cache_file}: {e}")
-
-
-def process_and_sample_data(dataset_name, batch_size=32, num_bins=32, samples_per_batch=64):
+def process_and_sample_data(dataset_name, batch_size=32, num_bins=32, samples_per_batch=64, seed=0):
     """
     Load dataset and perform stratified sampling by extension lengths
     Memory-optimized version that processes data in streaming fashion
     """
     logging.info(f"Loading and processing data from: {dataset_name}")
+
+    # Set random seed for reproducibility
+    np.random.seed(seed)
+    logging.info(f"Set random seed to {seed} for reproducible sampling")
 
     # Load the specified dataset
     data = load_dataset(dataset_name).with_format("numpy")
@@ -227,11 +144,11 @@ def process_and_sample_data(dataset_name, batch_size=32, num_bins=32, samples_pe
 
         # Stratified sampling by extension lengths
         # Bin the extensions into bins
-        bins = np.linspace(extensions.min(), extensions.max(), num_bins + 1)
-        bin_indices = np.digitize(extensions, bins) - 1  # bin_indices in [0, num_bins-1]
+        bins = jnp.linspace(extensions.min(), extensions.max(), num_bins + 1)
+        bin_indices = jnp.digitize(extensions, bins) - 1  # bin_indices in [0, num_bins-1]
         x_chosen = []
         for i in range(num_bins):
-            idx_in_bin = np.where(bin_indices == i)[0]
+            idx_in_bin = jnp.where(bin_indices == i)[0]
             if len(idx_in_bin) > 0:
                 # Randomly pick one sample from this bin
                 chosen_idx = np.random.choice(idx_in_bin, size=1)
@@ -240,19 +157,19 @@ def process_and_sample_data(dataset_name, batch_size=32, num_bins=32, samples_pe
         # If less than samples_per_batch bins have samples, randomly fill up to samples_per_batch
         if len(x_chosen) < samples_per_batch:
             remaining = samples_per_batch - len(x_chosen)
-            all_indices = np.arange(x.shape[0])
-            already_chosen = np.concatenate(x_chosen).reshape(-1, x.shape[1])
-            mask = np.ones(x.shape[0], dtype=bool)
+            all_indices = jnp.arange(x.shape[0])
+            already_chosen = jnp.concatenate(x_chosen).reshape(-1, x.shape[1])
+            mask = jnp.ones(x.shape[0], dtype=bool)
             for arr in x_chosen:
-                mask[np.where((x == arr).all(axis=1))[0][0]] = False
+                mask = mask.at[jnp.where((x == arr).all(axis=1))[0][0]].set(False)
             remaining_indices = all_indices[mask]
             if len(remaining_indices) > 0:
                 extra_idx = np.random.choice(remaining_indices, size=min(remaining, len(remaining_indices)), replace=False)
                 x_chosen.extend([x[i:i+1] for i in extra_idx])
 
-        # Convert to numpy and add to collection
+        # Convert to jnp array and add to collection
         if x_chosen:
-            x_chosen = np.concatenate(x_chosen, axis=0)
+            x_chosen = jnp.concatenate(x_chosen, axis=0)
             x_data.append(x_chosen)
 
         # Explicitly delete large objects to free memory
@@ -264,13 +181,13 @@ def process_and_sample_data(dataset_name, batch_size=32, num_bins=32, samples_pe
             logging.info(f"  Processed {batch_idx + 1}/{total_batches} batches, collected {current_samples} samples")
 
     # Final concatenation
-    x_data = np.concatenate(x_data, axis=0)
+    x_data = jnp.concatenate(x_data, axis=0)
     logging.info(f"Processed and sampled {len(x_data)} samples for PCA fitting")
     return x_data
 
 
 @hydra.main(version_base=None, config_path="config", config_name="polymer_dynamics_wi")
-def main(cfg: DictConfig) -> None:
+def main(config: DictConfig) -> None:
     # Configure logging
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -280,10 +197,11 @@ def main(cfg: DictConfig) -> None:
     logging.info("=" * 60)
 
     X = process_and_sample_data(
-        cfg.data.generation.pca_source,
-        batch_size=cfg.data.generation.batch_size,
-        num_bins=cfg.data.generation.num_bins,
-        samples_per_batch=cfg.data.generation.samples_per_batch
+        config.data.generation.pca_source,
+        batch_size=config.data.generation.batch_size,
+        num_bins=config.data.generation.num_bins,
+        samples_per_batch=config.data.generation.samples_per_batch,
+        seed=config.data.generation.seed
     )
 
     # Step 2: Build PCA components
@@ -329,25 +247,6 @@ def main(cfg: DictConfig) -> None:
     def pca_projection(x):
         return encode(x).ravel()
 
-    def flip_test_data_ordering(x):
-        """
-        Flip test data dimensions:
-        [NUM_STEPS, 900] -> [NUM_STEPS, 3, 300] -> transpose last 2 dims -> [NUM_STEPS, 300, 3] -> [NUM_STEPS, 900]
-        """
-        # x shape: [NUM_STEPS, 900]
-        num_steps = x.shape[0]
-
-        # Reshape to [NUM_STEPS, 3, 300]
-        x_reshaped = x.reshape(num_steps, 3, 300)
-
-        # Transpose last 2 dimensions to get [NUM_STEPS, 300, 3]
-        x_transposed = jnp.transpose(x_reshaped, (0, 2, 1))
-
-        # Reshape back to [NUM_STEPS, 900]
-        x_flipped = x_transposed.reshape(num_steps, 900)
-
-        return x_flipped
-
     def transform(x):
         z_star = get_extension_transform(x)
         z_hat = pca_projection(x)
@@ -365,24 +264,23 @@ def main(cfg: DictConfig) -> None:
     train_output_path = None
     test_output_path = None
 
+    # Main transformation function
+    def transform_dataset(dataset):
+        return dataset.map(lambda x: {"x": transform_vmap(x["x"])})
+
     # Process train dataset first (if not skipped)
-    if cfg.data.generation.skip_train:
+    if config.data.generation.skip_train:
         logging.info("Skipping training data processing (skip_train enabled)")
     else:
-        logging.info(f"Loading and transforming train data from: {cfg.data.generation.train_dataset}")
-        train_data = load_dataset(cfg.data.generation.train_dataset).with_format("numpy")
-
-        # Apply log transformation if enabled
-        if cfg.data.generation.log_transform:
-            logging.info("Applying log transformation to train data...")
-            train_data = log_transform_dataset(train_data)
+        logging.info(f"Loading and transforming train data from: {config.data.generation.train_dataset}")
+        train_data = load_dataset(config.data.generation.train_dataset).with_format("numpy")
 
         # Processing train data
         logging.info("Processing train data...")
-        train_data_pca = train_data.map(lambda x: {"x": transform_vmap(x["x"])})
+        train_data_pca = transform_dataset(train_data)
 
         # Save train data immediately and release memory
-        train_output_path = f"{cfg.data.cache_path}_train"
+        train_output_path = f"{config.data.cache_path}_train"
         logging.info(f"Saving train data to: {train_output_path}")
         train_data_pca.save_to_disk(train_output_path)
 
@@ -391,39 +289,18 @@ def main(cfg: DictConfig) -> None:
         logging.info("Train data processed and saved, memory released")
 
     # Now process test dataset (if not skipped)
-    if cfg.data.generation.skip_test:
+    if config.data.generation.skip_test:
         logging.info("\nSkipping test data processing (skip_test enabled)")
     else:
-        logging.info(f"\nLoading and transforming test data from: {cfg.data.generation.test_dataset}")
-        test_data = load_dataset(cfg.data.generation.test_dataset).with_format("numpy")
-
-        # Apply log transformation if enabled
-        if cfg.data.generation.log_transform:
-            logging.info("Applying log transformation to test data...")
-            test_data = log_transform_dataset(test_data)
-
-        # Define test data transformation function based on flip flag
-        if cfg.data.generation.flip_test:
-            logging.info("Flip mode enabled: Will reorder test data dimensions before transformation")
-            logging.info("   [NUM_STEPS, 900] -> [NUM_STEPS, 3, 300] -> transpose -> [NUM_STEPS, 300, 3] -> [NUM_STEPS, 900]")
-
-            def transform_test_data(batch):
-                # First flip the data ordering
-                x_flipped = flip_test_data_ordering(batch["x"])
-                # Then apply the usual transformation
-                return {"x": transform_vmap(x_flipped)}
-        else:
-            logging.info("Standard mode: Applying transformation without dimension reordering")
-
-            def transform_test_data(batch):
-                return {"x": transform_vmap(batch["x"])}
+        logging.info(f"\nLoading and transforming test data from: {config.data.generation.test_dataset}")
+        test_data = load_dataset(config.data.generation.test_dataset).with_format("numpy")
 
         # Processing test data
         logging.info("Processing test data...")
-        test_data_pca = test_data.map(transform_test_data)
+        test_data_pca = transform_dataset(test_data)
 
         # Save test data
-        test_output_path = f"{cfg.data.cache_path}_test"
+        test_output_path = f"{config.data.cache_path}_test"
         logging.info(f"Saving test data to: {test_output_path}")
         test_data_pca.save_to_disk(test_output_path)
 
@@ -434,7 +311,7 @@ def main(cfg: DictConfig) -> None:
     logging.info("\n" + "=" * 60)
     logging.info("PROCESSING COMPLETE")
     logging.info("=" * 60)
-    logging.info(f"PCA fitted on sampled data from {cfg.data.generation.pca_source}")
+    logging.info(f"PCA fitted on sampled data from {config.data.generation.pca_source}")
 
     if train_output_path:
         logging.info(f"Train data transformed and saved to: {train_output_path}")
@@ -445,19 +322,6 @@ def main(cfg: DictConfig) -> None:
         logging.info(f"Test data transformed and saved to: {test_output_path}")
     else:
         logging.info("Test data processing skipped")
-
-    # Report transformation details
-    transform_arg = cfg.data.generation.get("transform_arg", "none")
-    if transform_arg == "scale":
-        scale_factor = cfg.data.generation.get("scale_factor", 0.1)
-        logging.info(f"Args transformation: {transform_arg} (factor={scale_factor})")
-    else:
-        logging.info(f"Args transformation: {transform_arg}")
-
-    logging.info(f"X transform: [extension, PC-1_whitened, PC-2_whitened]")
-    logging.info(f"PC variance ratio: {lams[0]/lams[1]:.3f}")
-    logging.info("Memory optimized: datasets processed sequentially to minimize peak usage")
-
 
 if __name__ == "__main__":
     main()
