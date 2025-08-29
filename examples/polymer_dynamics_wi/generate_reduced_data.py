@@ -253,7 +253,7 @@ def save_pca_components(cache_path: str, filename: str, P: jnp.ndarray, mu: jnp.
         lams: Eigenvalues tuple
     """
     # Save the raw components that can be used to reconstruct the functions
-    components_file = get_path(cache_path, f"{filename}_pca_components.pkl")
+    components_file = get_path(cache_path, f"{filename}_components.pkl")
 
     components = {
         'P': np.array(P),
@@ -282,7 +282,7 @@ def load_pca_components(cache_path: str, filename: str) -> Tuple[jnp.ndarray, jn
     Returns:
         P, mu, encode, decode, eigenvalues
     """
-    components_file = get_path(cache_path, f"{filename}_pca_components.pkl")
+    components_file = get_path(cache_path, f"{filename}_components.pkl")
 
     if not os.path.exists(components_file):
         raise FileNotFoundError(f"PCA components file not found: {components_file}")
