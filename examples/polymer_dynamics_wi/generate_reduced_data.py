@@ -1,4 +1,5 @@
-from datasets import load_dataset, concatenate_datasets
+from datasets import load_dataset, concatenate_datasets, load_from_disk
+from datasets import Dataset
 import jax
 import hydra
 from omegaconf import DictConfig
@@ -6,7 +7,30 @@ import jax.numpy as jnp
 import numpy as np
 from tqdm import tqdm
 import logging
+import os
+from examples.utils.data import shrink_and_concatenate
+from examples.utils.data import get_path
 
+
+# def load_and_process_data(config: DictConfig) -> Dataset:
+#     """
+#     Loads and processes the dataset for training.
+
+#     Args:
+#         config (DictConfig): Configuration object containing data loading parameters.
+
+#     Returns:
+#         Dataset: Processed dataset ready for training.
+#     """
+#     # Load the dataset from the specified repository
+#     train_path = f"{config.data.filename}_train"
+#     dataset = load_from_disk(train_path)
+
+#     dataset = shrink_and_concatenate(
+#         dataset, new_traj_len=config.train.train_traj_len
+#     )
+
+#     return dataset
 
 
 # ------------------------------------------------------------------ #
@@ -63,7 +87,8 @@ def build_two_PCs(X, eps=1e-12):
     """
     Original PCA method without manual scaling
     X  : (N, 900) flattened chains, inter-leaved (x1,y1,z1,…)
-    returns  P (2×900), mu (1×900), encode callable, eigenvalues
+    returns  P (2x900), mu (1x900), encode callable, eigenvalues
+    TODO: Save decoder as well
     """
     # Create projectors for the two sectors
     ops = make_ops()
@@ -103,9 +128,10 @@ def build_two_PCs(X, eps=1e-12):
     return P, mu, encode, (lam1, lam2)
 
 
-# --------------------------------------------------------------------
-#  Data processing and stratified sampling functions
-# --------------------------------------------------------------------
+# ------------------------------------------------------------------ #
+#          Data processing and stratified sampling functions         #
+# ------------------------------------------------------------------ #
+
 
 @jax.jit
 def get_extension(x):
@@ -114,12 +140,24 @@ def get_extension(x):
     return extension
 
 
-def process_and_sample_data(dataset_name, batch_size=32, num_bins=32, samples_per_batch=64, seed=0):
+def sample_pca_data(dataset_name, batch_size=32, num_bins=32, samples_per_batch=64, seed=0, cache_path=None, filename=None):
     """
     Load dataset and perform stratified sampling by extension lengths
     Memory-optimized version that processes data in streaming fashion
     """
-    logging.info(f"Loading and processing data from: {dataset_name}")
+
+    # Check if cached data exists and load it
+    if filename is not None:
+        cache_file = get_path(cache_path, f"{filename}.npy")
+        if os.path.exists(cache_file):
+            logging.info(f"Loading cached PCA data from: {cache_file}")
+            x_data = np.load(cache_file)
+            x_data = jnp.array(x_data)
+            logging.info(f"Loaded {len(x_data)} cached samples for PCA fitting")
+            return x_data
+
+    # If no cached data, proceed with processing
+    logging.info(f"No cached data found. Loading and processing data from: {dataset_name}")
 
     # Set random seed for reproducibility
     np.random.seed(seed)
@@ -183,6 +221,13 @@ def process_and_sample_data(dataset_name, batch_size=32, num_bins=32, samples_pe
     # Final concatenation
     x_data = jnp.concatenate(x_data, axis=0)
     logging.info(f"Processed and sampled {len(x_data)} samples for PCA fitting")
+
+    # Save as NumPy array
+    if filename is not None:
+        cache_file = get_path(cache_path, f"{filename}.npy")
+        np.save(cache_file, np.array(x_data))
+        logging.info(f"Saved PCA data to: {cache_file}")
+
     return x_data
 
 
@@ -196,16 +241,18 @@ def main(config: DictConfig) -> None:
     logging.info("STEP 1: DATA PROCESSING AND SAMPLING")
     logging.info("=" * 60)
 
-    X = process_and_sample_data(
-        config.data.generation.pca_source,
-        batch_size=config.data.generation.batch_size,
-        num_bins=config.data.generation.num_bins,
-        samples_per_batch=config.data.generation.samples_per_batch,
-        seed=config.data.generation.seed
+    X = sample_pca_data(
+        config.data.reduction.pca_dataset,
+        batch_size=config.data.reduction.batch_size,
+        num_bins=config.data.reduction.num_bins,
+        samples_per_batch=config.data.reduction.samples_per_batch,
+        seed=config.data.reduction.seed,
+        cache_path=config.data.cache_path,
+        filename=config.data.reduction.filename,
     )
 
     # Step 2: Build PCA components
-    logging.info("\n" + "=" * 60)
+    logging.info("=" * 60)
     logging.info("STEP 2: PCA FITTING")
     logging.info("=" * 60)
 
@@ -216,15 +263,16 @@ def main(config: DictConfig) -> None:
     P, mu, encode, lams = build_two_PCs(X_jax)
 
     # PCA diagnostics
-    logging.info("PCA DIAGNOSTICS")
-    logging.info("-" * 40)
+    logging.info("PCA diagnostics")
+    logging.info("-" * 60)
     logging.info(f"PC-1 eigenvalue (variance): {lams[0]:.6f}")
     logging.info(f"PC-2 eigenvalue (variance): {lams[1]:.6f}")
     logging.info(f"Variance ratio (PC-1/PC-2): {lams[0]/lams[1]:.6f}")
     logging.info(f"Whitening scales: [{1.0/jnp.sqrt(lams[0]):.6f}, {1.0/jnp.sqrt(lams[1]):.6f}]")
 
     # Test encoder on PCA fitting data
-    logging.info("\n--- Testing encoder on PCA fitting data ---")
+    logging.info("-" * 60)
+    logging.info("Testing encoder on PCA fitting data")
     all_projected = encode(X_jax)
     logging.info(f"PCA data shape: {X_jax.shape}")
     logging.info(f"Projected shape: {all_projected.shape}")
@@ -255,15 +303,15 @@ def main(config: DictConfig) -> None:
         return jnp.concatenate([jnp.array([z_star]), z_hat])
 
     def transform_args(args):
-        if config.data.generation.arg_transform == "log":
+        if config.data.reduction.arg_transform == "log":
             return jnp.concatenate([args[0:1], jnp.log10(args[1:2])])
-        elif config.data.generation.arg_transform == "scale":
-            return args * jnp.array([1.0, config.data.generation.scale_factor])
+        elif config.data.reduction.arg_transform == "scale":
+            return args * jnp.array([1.0, config.data.reduction.scale_factor])
         else:
             return args
 
     # Step 4: Transform train and test datasets
-    logging.info("\n" + "=" * 60)
+    logging.info("=" * 60)
     logging.info("STEP 3: DATASET TRANSFORMATION")
     logging.info("=" * 60)
 
@@ -285,18 +333,20 @@ def main(config: DictConfig) -> None:
         )
 
     # Process train dataset first (if not skipped)
-    if config.data.generation.skip_train:
+    if config.data.reduction.skip_train:
         logging.info("Skipping training data processing (skip_train enabled)")
     else:
-        logging.info(f"Loading and transforming train data from: {config.data.generation.train_dataset}")
-        train_data = load_dataset(config.data.generation.train_dataset).with_format("numpy")
+        logging.info(f"Loading and transforming train data from: {config.data.reduction.train_dataset}")
+        train_data = load_dataset(config.data.reduction.train_dataset).with_format("numpy")
 
         # Processing train data
         logging.info("Processing train data...")
         train_data_pca = transform_dataset(train_data)
+        logging.info(f"Modify trajectory length to {config.data.reduction.train_traj_len}...")
+        train_data_pca = shrink_and_concatenate(train_data_pca, new_traj_len=config.data.reduction.train_traj_len)
 
         # Save train data immediately and release memory
-        train_output_path = f"{config.data.cache_path}_train"
+        train_output_path = get_path(config.data.cache_path, f"{config.data.filename}_train")
         logging.info(f"Saving train data to: {train_output_path}")
         train_data_pca.save_to_disk(train_output_path)
 
@@ -305,18 +355,18 @@ def main(config: DictConfig) -> None:
         logging.info("Train data processed and saved, memory released")
 
     # Now process test dataset (if not skipped)
-    if config.data.generation.skip_test:
-        logging.info("\nSkipping test data processing (skip_test enabled)")
+    if config.data.reduction.skip_test:
+        logging.info("Skipping test data processing (skip_test enabled)")
     else:
-        logging.info(f"\nLoading and transforming test data from: {config.data.generation.test_dataset}")
-        test_data = load_dataset(config.data.generation.test_dataset).with_format("numpy")
+        logging.info(f"Loading and transforming test data from: {config.data.reduction.test_dataset}")
+        test_data = load_dataset(config.data.reduction.test_dataset).with_format("numpy")
 
         # Processing test data
         logging.info("Processing test data...")
         test_data_pca = transform_dataset(test_data)
 
         # Save test data
-        test_output_path = f"{config.data.cache_path}_test"
+        test_output_path = get_path(config.data.cache_path, f"{config.data.filename}_test")
         logging.info(f"Saving test data to: {test_output_path}")
         test_data_pca.save_to_disk(test_output_path)
 
@@ -324,10 +374,10 @@ def main(config: DictConfig) -> None:
         del test_data, test_data_pca
         logging.info("Test data processed and saved, memory released")
 
-    logging.info("\n" + "=" * 60)
+    logging.info("=" * 60)
     logging.info("PROCESSING COMPLETE")
     logging.info("=" * 60)
-    logging.info(f"PCA fitted on sampled data from {config.data.generation.pca_source}")
+    logging.info(f"PCA fitted on sampled data from {config.data.reduction.pca_dataset}")
 
     if train_output_path:
         logging.info(f"Train data transformed and saved to: {train_output_path}")

@@ -6,8 +6,8 @@ jax.config.update("jax_enable_x64", True)
 
 import equinox as eqx
 from datasets import load_dataset, load_from_disk
-from examples.utils.data import shrink_and_concatenate
 from onsagernet.dynamics import OnsagerNet
+from examples.utils.data import get_path
 
 from onsagernet.models import (
     PotentialResMLP,
@@ -96,36 +96,6 @@ def build_model(config: DictConfig) -> SDE:
     return sde
 
 
-def load_and_process_data(config: DictConfig) -> Dataset:
-    """
-    Loads and processes the dataset for training.
-
-    Args:
-        config (DictConfig): Configuration object containing data loading parameters.
-
-    Returns:
-        Dataset: Processed dataset ready for training.
-    """
-    # Load the dataset from the specified repository
-    splits = {split: split for split in config.data.splits}
-    if "cache_path" in config.data:
-        # If a cache path is specified, load from cache_path_train
-        train_cache_path = f"{config.data.cache_path}_train"
-        dataset_dict = load_from_disk(train_cache_path)
-    elif "local_repo" in config.data:
-        # Backward compatibility: If a local repository is specified, load from there
-        dataset_dict = load_from_disk(config.data.local_repo)
-    else:
-        # Otherwise, load from the remote repository
-        dataset_dict = load_dataset(config.data.repo, split=splits)
-
-    dataset = shrink_and_concatenate(
-        dataset_dict, new_traj_len=config.train.train_traj_len
-    )
-
-    return dataset
-
-
 @hydra.main(
     config_path="./config",
     config_name="polymer_dynamics_wi",
@@ -144,35 +114,11 @@ def train_model(config: DictConfig) -> None:
 
     # Use Hydra's default logger
     logger = logging.getLogger(__name__)
-
-    # Load the data from the specified repository
-    if "cache_path" in config.data:
-        dataset_name = f"{config.data.cache_path}_train"
-    elif "local_repo" in config.data:
-        dataset_name = config.data.local_repo  # Backward compatibility
-    else:
-        dataset_name = config.data.repo
-
-    # Clean up the dataset name for use as directory name
-    cache_dir = "cached_data_"+dataset_name.replace("/", "_").replace(":", "_")  # TODO: remove these cache
-
-    if config.data.get("cache", False):
-        if os.path.exists(cache_dir):
-            logger.info("Loading dataset from cache...")
-            dataset = Dataset.load_from_disk(cache_dir)
-        else:
-            logger.info("Processing and caching dataset...")
-            dataset = load_and_process_data(config)
-            logger.info(f"Caching dataset to {cache_dir}...")
-            try:
-                dataset.save_to_disk(cache_dir)
-                logger.info(f"Successfully cached dataset to {cache_dir}")
-            except Exception as e:
-                logger.error(f"Failed to cache dataset: {e}")
-                logger.info("Continuing without caching...")
-    else:
-        logger.info("Loading dataset from repository and processing...")
-        dataset = load_and_process_data(config)
+    train_path = get_path(config.data.cache_path, f"{config.data.filename}_train")
+    dataset = load_from_disk(train_path).with_format("jax")
+    # dataset = load_and_process_data(config)
+    logger.info(f"Loaded training dataset from {train_path}")
+    logger.info("="*60)
 
     # Build the model using the configuration and dataset
     logger.info("Building model...")
@@ -183,7 +129,7 @@ def train_model(config: DictConfig) -> None:
         model_path = config.model.load_model
         logger.info(f"Loading model from {model_path}...")
         model = eqx.tree_deserialise_leaves(model_path, model)
-
+    logger.info("="*60)
 
     # Initialize the MLE trainer with configuration options
     logger.info("Setting up data augmentation...")
@@ -192,10 +138,11 @@ def train_model(config: DictConfig) -> None:
     aug = RandomChoiceAugmentation([ht_aug, ref_aug])
 
     logger.info("Configured augmentations:")
-    logger.info("  - ReducedHeadTailFlip: Flips y-coordinate [1, -1, 1]")
-    logger.info("  - ReducedReflectionX: Flips y,z-coordinates [1, -1, -1]")
-    logger.info("  - RandomChoiceAugmentation: Randomly selects one per batch")
-    logger.info(f"  - Augmentation probability: 50% of batches")
+    logger.info("ReducedHeadTailFlip: Flips z2 - [1, -1, 1]")
+    logger.info("ReducedReflectionX: Flips z2,z3 - [1, -1, -1]")
+    logger.info("RandomChoiceAugmentation: Randomly selects one per batch")
+    logger.info(f"Augmentation probability: {config.train.aug_prob}")
+    logger.info("="*60)
 
     trainer = MLETrainer(
         opt_options=config.train.opt,
@@ -206,10 +153,10 @@ def train_model(config: DictConfig) -> None:
 
     # Start training the model using the trainer
     logger.info(f"Training OnsagerNet for {config.train.num_epochs} epochs...")
-    logger.info(f"Expected augmentation: ~50% of batches will be augmented")
+    logger.info("="*60)
 
     # Create a random key for augmentation
-    training_key = jax.random.PRNGKey(config.model.get("training_seed", 123))
+    training_key = jax.random.PRNGKey(config.train.get("seed", 123))
 
     trained_model, _, _ = trainer.train(
         model=model,
@@ -219,7 +166,7 @@ def train_model(config: DictConfig) -> None:
         logger=logger,
         checkpoint_dir=runtime_dir,  # Directory to save checkpoints
         checkpoint_every=config.train.checkpoint_every,  # Frequency to save checkpoints
-        rng_key=training_key,  # Provide explicit random key for augmentation
+        rng_key=training_key,
     )
 
     # Log the completion of training and save the trained model

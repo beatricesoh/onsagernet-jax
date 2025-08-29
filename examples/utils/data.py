@@ -1,5 +1,6 @@
 """Data utilities."""
 
+import os
 import jax.numpy as jnp
 from datasets import Dataset, Features, Array2D, DatasetDict
 from datasets import concatenate_datasets
@@ -87,3 +88,17 @@ def shrink_and_concatenate(
         ]
     )
     return concatenated_dataset.with_format("jax")
+
+
+
+# ------------------------------------------------------------------ #
+#                       Data caching utilities                       #
+# ------------------------------------------------------------------ #
+
+
+def get_path(cache_path, filename):
+    """
+    Create cache directory if it doesn't exist and return full cache path
+    """
+    os.makedirs(cache_path, exist_ok=True)
+    return os.path.join(cache_path, filename)
