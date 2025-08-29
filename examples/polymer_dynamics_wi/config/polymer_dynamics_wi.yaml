@@ -1,0 +1,91 @@
+# Default config file for polymer dynamics with varying Wi
+dim: 3
+
+data:
+  cache_path: "data_cache"                   # path to put all the saved data
+  filename: "reduced_data"                   # filename for reduced data (assume data files are in data_cache)
+
+  reduction:  # settings for reduction map of original data
+    seed: 123
+    # Source datasets on huggingface hub
+    pca_dataset: "MLDS-NUS/Wis_ParamSweep_New"    # Source dataset for PCA fitting
+    train_dataset: "MLDS-NUS/Wis_ParamSweep_New" # Dataset for training data transformation
+    test_dataset: "MLDS-NUS/Wis_Holdout"     # Dataset for test data transformation
+
+    # Processing parameters
+    batch_size: 32                          # Batch size for processing PCA source data
+    num_bins: 32                            # Number of bins for stratified sampling by extension
+    samples_per_batch: 64                   # Number of samples to select per batch
+
+    # Transformation options
+    arg_transform: null                     # Args transformation: null (none), "log", or "scale"
+    scale_factor: 1.0                       # Scale factor for "scale" transformation (default: 1.0)
+
+    # Processing control
+    skip_train: false                       # Skip processing training data
+    skip_test: false                        # Skip processing test data
+    load_existing_pca: false                # Load existing PCA components instead of recomputing
+
+    train_traj_len: 500 # can shrink the length of the training trajectories for better GPU performance
+    filename: "pca"
+
+model:
+  # load_model: "outputs/2025_07_25-14_39_28/model.eqx"
+  load_model: false
+  seed: 123  # random seed
+  potential:
+    activation: "srequ" # shifted ReQU activation
+    alpha: 0.01 # regularization strength
+    units: # layer sizes
+      - 128
+    n_pot: 32
+    param_idx:
+      - 1
+  dissipation:
+    activation: "tanh"
+    alpha: 0.01
+    units:
+      - 32
+      - 32
+    param_idx:
+      - 1
+    is_bounded: false
+  conservation:
+    activation: "tanh"
+    units:
+      - 32
+      - 32
+    param_idx:
+      - 1
+    is_bounded: false
+  diffusion:
+    alpha: 0.01
+    units:
+      - 32
+      - 32
+    activation: "srequ"
+    param_idx:
+      - 1
+
+train:
+  seed: 123
+  num_epochs: 2000 # number of epochs for training the SDE
+  batch_size: 256 # each batch will be [batch_size, train_traj_len, dim], so use a small batch size if train_traj_len is large
+  checkpoint_every: 10 # number of epochs to check-point the model
+  opt: # optimiser options
+    learning_rate: 1.0e-3
+  rop: # reduce on plateau options
+    patience: 20
+    cooldown: 20
+    factor: 0.4
+    rtol: 1.0e-4
+    min_scale: 1.0e-5
+    accumulation_size: 2000
+  aug_prob: 0.5  # data augmentation probability
+
+hydra:
+  run:
+    dir: ./outputs/${now:%Y_%m_%d-%H_%M_%S}
+  sweep:
+    dir: ./outputs/multirun/${now:%Y_%m_%d-%H_%M_%S}
+    subdir: ${hydra.job.num}

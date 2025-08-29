@@ -1,60 +1,41 @@
-from datasets import load_dataset, concatenate_datasets, load_from_disk
-from datasets import Dataset
+import os
 import jax
 import hydra
-from omegaconf import DictConfig
-import jax.numpy as jnp
-import numpy as np
-from tqdm import tqdm
 import logging
-import os
+import pickle
+import numpy as np
+import jax.numpy as jnp
+from typing import Optional, Tuple, Callable
+from tqdm import tqdm
+from datasets import load_dataset, concatenate_datasets, Dataset
+from omegaconf import DictConfig
 from examples.utils.data import shrink_and_concatenate
 from examples.utils.data import get_path
-
-
-# def load_and_process_data(config: DictConfig) -> Dataset:
-#     """
-#     Loads and processes the dataset for training.
-
-#     Args:
-#         config (DictConfig): Configuration object containing data loading parameters.
-
-#     Returns:
-#         Dataset: Processed dataset ready for training.
-#     """
-#     # Load the dataset from the specified repository
-#     train_path = f"{config.data.filename}_train"
-#     dataset = load_from_disk(train_path)
-
-#     dataset = shrink_and_concatenate(
-#         dataset, new_traj_len=config.train.train_traj_len
-#     )
-
-#     return dataset
 
 
 # ------------------------------------------------------------------ #
 #         Build two symmetry-constrained principal components        #
 # ------------------------------------------------------------------ #
 
+# ----------------- Build symmetry linear operators ---------------- #
 
-# ---- symmetry operators (inter-leaved layout) ----------------------
-def make_ops(n=300):
+def make_ops(n: int = 300) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     idx_x = jnp.arange(0, 3*n, 3)
     idx_y = jnp.arange(1, 3*n, 3)
     idx_z = jnp.arange(2, 3*n, 3)
 
     I  = jnp.eye(3*n)
     J  = jnp.flipud(jnp.eye(n))
-    R  = jnp.kron(J, jnp.eye(3))          # head–tail reversal
+    R  = jnp.kron(J, jnp.eye(3))
 
     Tx = jnp.eye(3*n).at[idx_x, idx_x].set(-1)
     Ty = jnp.eye(3*n).at[idx_y, idx_y].set(-1)
     Tz = jnp.eye(3*n).at[idx_z, idx_z].set(-1)
     return I, R, Tx, Ty, Tz
 
-# ---- projector for a given character --------------------------------
-def projector(chR, chTx, chTy, chTz, ops=None):
+# ----------------- projector for a given character ---------------- #
+
+def projector(chR: int, chTx: int, chTy: int, chTz: int, ops: Optional[Tuple[jnp.ndarray, ...]] = None) -> jnp.ndarray:
     if ops is None:
         I, R, Tx, Ty, Tz = make_ops()
     else:
@@ -75,20 +56,23 @@ def projector(chR, chTx, chTy, chTz, ops=None):
     ]
     return 0.0625 * sum(s*o for s, o in zip(signs, ops_list))  # 1/16 factor
 
-# ---- dominant eigenvector of a symmetric matrix ---------------------
-def top_eigvec(S):
-    vals, vecs = jnp.linalg.eigh(S)          # ascending order
+
+# ----------- dominant eigenvector of a symmetric matrix ----------- #
+
+def top_eigvec(S: jnp.ndarray) -> Tuple[jnp.ndarray, float]:
+    vals, vecs = jnp.linalg.eigh(S)
     v = vecs[:, -1]
     lam = vals[-1]
     return v, lam
 
-# ---- main builder ----------------------------------------------------
-def build_two_PCs(X, eps=1e-12):
+
+# -------------- Build symmetric principal components -------------- #
+
+def build_two_PCs(X: jnp.ndarray, eps: float = 1e-12) -> Tuple[jnp.ndarray, jnp.ndarray, Callable[[jnp.ndarray], jnp.ndarray], Callable[[jnp.ndarray], jnp.ndarray], Tuple[float, float]]:
     """
     Original PCA method without manual scaling
     X  : (N, 900) flattened chains, inter-leaved (x1,y1,z1,…)
-    returns  P (2x900), mu (1x900), encode callable, eigenvalues
-    TODO: Save decoder as well
+    returns  P (2x900), mu (1x900), encode callable, decode callable, eigenvalues
     """
     # Create projectors for the two sectors
     ops = make_ops()
@@ -121,26 +105,45 @@ def build_two_PCs(X, eps=1e-12):
     # Whitening: divide by square root of variances
     whitening_scale = 1.0 / jnp.sqrt(jnp.array([lam1, lam2]))
 
-    def encode(X_new):
+    def encode(X_new: jnp.ndarray) -> jnp.ndarray:
         projected = (P @ (X_new - mu).T).T       # (N,2)
         return projected * whitening_scale       # Apply whitening
 
-    return P, mu, encode, (lam1, lam2)
+    def decode(Z: jnp.ndarray) -> jnp.ndarray:
+        """
+        Decode from PCA space back to original space
+        Z: (N, 2) array of PCA coordinates (whitened)
+        returns: (N, 900) array in original space
+        """
+        # Undo whitening
+        Z_unwhitened = Z / whitening_scale
+        # Project back to original space and add mean
+        reconstructed = (Z_unwhitened @ P) + mu
+        return reconstructed
+
+    return P, mu, encode, decode, (lam1, lam2)
 
 
 # ------------------------------------------------------------------ #
 #          Data processing and stratified sampling functions         #
 # ------------------------------------------------------------------ #
 
-
 @jax.jit
-def get_extension(x):
+def get_extension(x: jnp.ndarray) -> float:
     x = x.reshape(-1, 3)
     extension = jnp.max(x[:, 0]) - jnp.min(x[:, 0])
     return extension
 
 
-def sample_pca_data(dataset_name, batch_size=32, num_bins=32, samples_per_batch=64, seed=0, cache_path=None, filename=None):
+def sample_pca_data(
+    dataset_name: str,
+    batch_size: int = 32,
+    num_bins: int = 32,
+    samples_per_batch: int = 64,
+    seed: int = 0,
+    cache_path: Optional[str] = None,
+    filename: Optional[str] = None
+) -> jnp.ndarray:
     """
     Load dataset and perform stratified sampling by extension lengths
     Memory-optimized version that processes data in streaming fashion
@@ -231,6 +234,85 @@ def sample_pca_data(dataset_name, batch_size=32, num_bins=32, samples_per_batch=
     return x_data
 
 
+# ------------------------------------------------------------------ #
+#         Save and load PCA components (encoder/decoder)            #
+# ------------------------------------------------------------------ #
+
+def save_pca_components(cache_path: str, filename: str, P: jnp.ndarray, mu: jnp.ndarray,
+                       encode: Callable, decode: Callable, lams: Tuple[float, float]) -> None:
+    """
+    Save PCA components (P, mu, eigenvalues) and create encoder/decoder functions.
+
+    Args:
+        cache_path: Directory to save components
+        filename: Base filename (without extension)
+        P: PCA projection matrix (2, 900)
+        mu: Mean vector (1, 900)
+        encode: Encoder function
+        decode: Decoder function
+        lams: Eigenvalues tuple
+    """
+    # Save the raw components that can be used to reconstruct the functions
+    components_file = get_path(cache_path, f"{filename}_pca_components.pkl")
+
+    components = {
+        'P': np.array(P),
+        'mu': np.array(mu),
+        'eigenvalues': lams,
+        'whitening_scale': 1.0 / np.sqrt(np.array(lams))
+    }
+
+    with open(components_file, 'wb') as f:
+        pickle.dump(components, f)
+
+    logging.info(f"Saved PCA components to: {components_file}")
+
+
+def load_pca_components(cache_path: str, filename: str) -> Tuple[jnp.ndarray, jnp.ndarray,
+                                                               Callable[[jnp.ndarray], jnp.ndarray],
+                                                               Callable[[jnp.ndarray], jnp.ndarray],
+                                                               Tuple[float, float]]:
+    """
+    Load PCA components and reconstruct encoder/decoder functions.
+
+    Args:
+        cache_path: Directory containing components
+        filename: Base filename (without extension)
+
+    Returns:
+        P, mu, encode, decode, eigenvalues
+    """
+    components_file = get_path(cache_path, f"{filename}_pca_components.pkl")
+
+    if not os.path.exists(components_file):
+        raise FileNotFoundError(f"PCA components file not found: {components_file}")
+
+    with open(components_file, 'rb') as f:
+        components = pickle.load(f)
+
+    P = jnp.array(components['P'])
+    mu = jnp.array(components['mu'])
+    lams = components['eigenvalues']
+    whitening_scale = jnp.array(components['whitening_scale'])
+
+    # Reconstruct encoder and decoder functions
+    def encode(X_new: jnp.ndarray) -> jnp.ndarray:
+        projected = (P @ (X_new - mu).T).T
+        return projected * whitening_scale
+
+    def decode(Z: jnp.ndarray) -> jnp.ndarray:
+        Z_unwhitened = Z / whitening_scale
+        reconstructed = (Z_unwhitened @ P) + mu
+        return reconstructed
+
+    logging.info(f"Loaded PCA components from: {components_file}")
+    return P, mu, encode, decode, lams
+
+
+# ------------------------------------------------------------------ #
+#               Main data processing and saving routine              #
+# ------------------------------------------------------------------ #
+
 @hydra.main(version_base=None, config_path="config", config_name="polymer_dynamics_wi")
 def main(config: DictConfig) -> None:
     # Configure logging
@@ -251,16 +333,31 @@ def main(config: DictConfig) -> None:
         filename=config.data.reduction.filename,
     )
 
-    # Step 2: Build PCA components
+    # Step 2: Build or load PCA components
     logging.info("=" * 60)
     logging.info("STEP 2: PCA FITTING")
     logging.info("=" * 60)
 
-    X_jax = jnp.array(X)
-    # Release the numpy array to save memory
-    del X
-
-    P, mu, encode, lams = build_two_PCs(X_jax)
+    # Check if we should load existing PCA components
+    if config.data.reduction.get('load_existing_pca', False):
+        try:
+            P, mu, encode, decode, lams = load_pca_components(
+                cache_path=config.data.cache_path,
+                filename=config.data.reduction.filename
+            )
+            logging.info("Successfully loaded existing PCA components")
+            # We can skip the X_jax creation and go directly to testing
+            X_jax = jnp.array(X)
+            del X
+        except FileNotFoundError:
+            logging.info("No existing PCA components found, computing new ones...")
+            X_jax = jnp.array(X)
+            del X
+            P, mu, encode, decode, lams = build_two_PCs(X_jax)
+    else:
+        X_jax = jnp.array(X)
+        del X
+        P, mu, encode, decode, lams = build_two_PCs(X_jax)
 
     # PCA diagnostics
     logging.info("PCA diagnostics")
@@ -283,26 +380,50 @@ def main(config: DictConfig) -> None:
     logging.info(f"PC-1 variance after whitening: {pc1_var:.6f} (should be ~1.0)")
     logging.info(f"PC-2 variance after whitening: {pc2_var:.6f} (should be ~1.0)")
 
+    # Test decoder on a small subset
+    logging.info("-" * 60)
+    logging.info("Testing decoder on PCA fitting data")
+    test_subset = all_projected[:5]  # Test on first 5 samples
+    reconstructed = decode(test_subset)
+    original_subset = X_jax[:5]
+    reconstruction_error = jnp.mean(jnp.square(reconstructed - original_subset))
+    logging.info(f"Reconstruction error (MSE): {reconstruction_error:.6f}")
+    logging.info(f"Original data range: [{jnp.min(original_subset):.3f}, {jnp.max(original_subset):.3f}]")
+    logging.info(f"Reconstructed range: [{jnp.min(reconstructed):.3f}, {jnp.max(reconstructed):.3f}]")
+
+    # Save PCA components (encoder/decoder) if we computed new ones
+    if not config.data.reduction.get('load_existing_pca', False):
+        logging.info("-" * 60)
+        logging.info("Saving PCA components")
+        save_pca_components(
+            cache_path=config.data.cache_path,
+            filename=config.data.reduction.filename,
+            P=P, mu=mu, encode=encode, decode=decode, lams=lams
+        )
+    else:
+        logging.info("-" * 60)
+        logging.info("Using existing PCA components (not saving)")
+
     # Release PCA fitting data after validation
     del X_jax, all_projected
 
     # Step 3: Define transformation functions
-    def get_extension_transform(x):
+    def get_extension_transform(x: jnp.ndarray) -> float:
         x = x.reshape(300, 3)
         ext_normalised = (jnp.max(x[:, 0]) - jnp.min(x[:, 0])) / 300.0
         return ext_normalised
 
-    def pca_projection(x):
+    def pca_projection(x: jnp.ndarray) -> jnp.ndarray:
         return encode(x).ravel()
 
     # ------------------ Main transformation functions ----------------- #
 
-    def transform_x(x):
+    def transform_x(x: jnp.ndarray) -> jnp.ndarray:
         z_star = get_extension_transform(x)
         z_hat = pca_projection(x)
         return jnp.concatenate([jnp.array([z_star]), z_hat])
 
-    def transform_args(args):
+    def transform_args(args: jnp.ndarray) -> jnp.ndarray:
         if config.data.reduction.arg_transform == "log":
             return jnp.concatenate([args[0:1], jnp.log10(args[1:2])])
         elif config.data.reduction.arg_transform == "scale":
@@ -324,7 +445,7 @@ def main(config: DictConfig) -> None:
     test_output_path = None
 
     # Main transformation function
-    def transform_dataset(dataset):
+    def transform_dataset(dataset: Dataset) -> Dataset:
         return dataset.map(
             lambda batch: {
                 "x": transform_x_vmap(batch["x"]),

@@ -5,7 +5,7 @@ import jax.numpy as jnp
 jax.config.update("jax_enable_x64", True)
 
 import equinox as eqx
-from datasets import load_dataset, load_from_disk
+from datasets import load_from_disk
 from onsagernet.dynamics import OnsagerNet
 from examples.utils.data import get_path
 
@@ -22,7 +22,6 @@ from onsagernet._augmentations import (
     ReducedReflectionX
 )
 
-from datasets import Dataset
 from onsagernet.trainers import MLETrainer
 import numpy as np
 
