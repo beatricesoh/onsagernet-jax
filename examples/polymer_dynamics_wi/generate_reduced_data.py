@@ -68,60 +68,111 @@ def top_eigvec(S: jnp.ndarray) -> Tuple[jnp.ndarray, float]:
 
 # -------------- Build symmetric principal components -------------- #
 
-def build_two_PCs(X: jnp.ndarray, eps: float = 1e-12) -> Tuple[jnp.ndarray, jnp.ndarray, Callable[[jnp.ndarray], jnp.ndarray], Callable[[jnp.ndarray], jnp.ndarray], Tuple[float, float]]:
-    """
-    Original PCA method without manual scaling
-    X  : (N, 900) flattened chains, inter-leaved (x1,y1,z1,…)
-    returns  P (2x900), mu (1x900), encode callable, decode callable, eigenvalues
-    """
-    # Create projectors for the two sectors
+def build_two_PCs(
+    X: jnp.ndarray, eps: float = 1e-12
+) -> Tuple[jnp.ndarray, jnp.ndarray,
+           Callable[[jnp.ndarray], jnp.ndarray],
+           Callable[[jnp.ndarray], jnp.ndarray],
+           Tuple[float, float]]:
+
+    # Generators & character projectors
     ops = make_ops()
-    P1 = projector(chR=-1, chTx=-1, chTy=+1, chTz=+1, ops=ops)   # PC-1
-    P2 = projector(chR=+1, chTx=-1, chTy=+1, chTz=+1, ops=ops)   # PC-2
+    P1 = projector(chR=-1, chTx=-1, chTy=+1, chTz=+1, ops=ops)   # PC-1 sector
+    P2 = projector(chR=+1, chTx=-1, chTy=+1, chTz=+1, ops=ops)   # PC-2 sector
 
-    # centre with Tx-even mean  (zero x-mean)
-    mu = X.mean(axis=0, keepdims=True)
-    mu = mu.at[:, 0::3].set(0.0)
+    # --- Symmetrised centering (mean in the trivial sector) ---
+    mu_raw = X.mean(axis=0, keepdims=True)          # (1, d)
+    mu = symmetrise_mean(mu_raw, ops)               # (1, d) G-invariant mean
     Xc = X - mu
-    Sigma = Xc.T @ Xc / (len(X) - 1)        # (900,900)
 
-    # PC-1  (odd R & Tx)
+    # Raw covariance
+    Sigma_raw = Xc.T @ Xc / (len(X) - 1)            # (d, d)
+
+    # --- Symmetrise covariance over the group ---
+    Sigma = symmetrize_covariance(Sigma_raw, ops)   # (d, d)
+
+    # PCs inside symmetry sectors
     v1, _ = top_eigvec(P1 @ Sigma @ P1)
     v1 = P1 @ v1
     v1 = v1 / jnp.linalg.norm(v1)
 
-    # PC-2  (odd Tx only)
     v2, _ = top_eigvec(P2 @ Sigma @ P2)
     v2 = P2 @ v2
-    v2 = v2 / jnp.linalg.norm(v2)  # already orthogonal to v1
+    v2 = v2 / jnp.linalg.norm(v2)
 
-    P = jnp.vstack([v1, v2])                 # (2,900)
+    P = jnp.vstack([v1, v2])                        # (2, d)
 
-    # Compute actual variances by projecting the data
-    raw_projected = (P @ Xc.T).T  # Project centered data
-    lam1 = jnp.var(raw_projected[:, 0])  # Actual variance of PC-1
-    lam2 = jnp.var(raw_projected[:, 1])  # Actual variance of PC-2
+    # Variances on centered *raw* data (fine for whitening)
+    raw_projected = (P @ Xc.T).T
+    lam1 = jnp.var(raw_projected[:, 0])
+    lam2 = jnp.var(raw_projected[:, 1])
 
-    # Whitening: divide by square root of variances
     whitening_scale = 1.0 / jnp.sqrt(jnp.array([lam1, lam2]))
 
     def encode(X_new: jnp.ndarray) -> jnp.ndarray:
-        projected = (P @ (X_new - mu).T).T       # (N,2)
-        return projected * whitening_scale       # Apply whitening
+        projected = (P @ (X_new - mu).T).T
+        return projected * whitening_scale
 
     def decode(Z: jnp.ndarray) -> jnp.ndarray:
-        """
-        Decode from PCA space back to original space
-        Z: (N, 2) array of PCA coordinates (whitened)
-        returns: (N, 900) array in original space
-        """
-        # Undo whitening
         Z_unwhitened = Z / whitening_scale
-        # Project back to original space and add mean
-        reconstructed = (Z_unwhitened @ P) + mu
-        return reconstructed
+        return (Z_unwhitened @ P) + mu
 
     return P, mu, encode, decode, (lam1, lam2)
+
+# def build_two_PCs(X: jnp.ndarray, eps: float = 1e-12) -> Tuple[jnp.ndarray, jnp.ndarray, Callable[[jnp.ndarray], jnp.ndarray], Callable[[jnp.ndarray], jnp.ndarray], Tuple[float, float]]:
+#     """
+#     Original PCA method without manual scaling
+#     X  : (N, 900) flattened chains, inter-leaved (x1,y1,z1,…)
+#     returns  P (2x900), mu (1x900), encode callable, decode callable, eigenvalues
+#     """
+#     # Create projectors for the two sectors
+#     ops = make_ops()
+#     P1 = projector(chR=-1, chTx=-1, chTy=+1, chTz=+1, ops=ops)   # PC-1
+#     P2 = projector(chR=+1, chTx=-1, chTy=+1, chTz=+1, ops=ops)   # PC-2
+
+#     # centre with Tx-even mean  (zero x-mean)
+#     mu = X.mean(axis=0, keepdims=True)
+#     mu = mu.at[:, 0::3].set(0.0)
+#     Xc = X - mu
+#     Sigma = Xc.T @ Xc / (len(X) - 1)        # (900,900)
+
+#     # PC-1  (odd R & Tx)
+#     v1, _ = top_eigvec(P1 @ Sigma @ P1)
+#     v1 = P1 @ v1
+#     v1 = v1 / jnp.linalg.norm(v1)
+
+#     # PC-2  (odd Tx only)
+#     v2, _ = top_eigvec(P2 @ Sigma @ P2)
+#     v2 = P2 @ v2
+#     v2 = v2 / jnp.linalg.norm(v2)  # already orthogonal to v1
+
+#     P = jnp.vstack([v1, v2])                 # (2,900)
+
+#     # Compute actual variances by projecting the data
+#     raw_projected = (P @ Xc.T).T  # Project centered data
+#     lam1 = jnp.var(raw_projected[:, 0])  # Actual variance of PC-1
+#     lam2 = jnp.var(raw_projected[:, 1])  # Actual variance of PC-2
+
+#     # Whitening: divide by square root of variances
+#     whitening_scale = 1.0 / jnp.sqrt(jnp.array([lam1, lam2]))
+
+#     def encode(X_new: jnp.ndarray) -> jnp.ndarray:
+#         projected = (P @ (X_new - mu).T).T       # (N,2)
+#         return projected * whitening_scale       # Apply whitening
+
+#     def decode(Z: jnp.ndarray) -> jnp.ndarray:
+#         """
+#         Decode from PCA space back to original space
+#         Z: (N, 2) array of PCA coordinates (whitened)
+#         returns: (N, 900) array in original space
+#         """
+#         # Undo whitening
+#         Z_unwhitened = Z / whitening_scale
+#         # Project back to original space and add mean
+#         reconstructed = (Z_unwhitened @ P) + mu
+#         return reconstructed
+
+#     return P, mu, encode, decode, (lam1, lam2)
 
 
 # ------------------------------------------------------------------ #
@@ -308,6 +359,39 @@ def load_pca_components(cache_path: str, filename: str) -> Tuple[jnp.ndarray, jn
     logging.info(f"Loaded PCA components from: {components_file}")
     return P, mu, encode, decode, lams
 
+# ------------------------------------------------------------------ #
+#                 Symmetrisation of covariance matrix                #
+# ------------------------------------------------------------------ #
+
+
+def group_elements_from_ops(ops: Tuple[jnp.ndarray, ...]) -> jnp.ndarray:
+    """Return stack (16, d, d) of all group elements from (I, R, Tx, Ty, Tz)."""
+    I, R, Tx, Ty, Tz = ops
+    elems = [
+        I,
+        R, Tx, Ty, Tz,
+        R @ Tx, R @ Ty, R @ Tz,
+        Tx @ Ty, Tx @ Tz, Ty @ Tz,
+        R @ Tx @ Ty, R @ Tx @ Tz, R @ Ty @ Tz, Tx @ Ty @ Tz,
+        R @ Tx @ Ty @ Tz,
+    ]
+    return jnp.stack(elems, axis=0)  # (16, d, d)
+
+def symmetrize_covariance(S: jnp.ndarray, ops: Tuple[jnp.ndarray, ...]) -> jnp.ndarray:
+    """
+    S_sym = (1/16) * sum_{g in G} U(g) S U(g)^T
+    """
+    G = group_elements_from_ops(ops)          # (16, d, d)
+    conj = jax.vmap(lambda g: g @ S @ g.T, in_axes=0, out_axes=0)
+    return jnp.mean(conj(G), axis=0)          # (d, d)
+
+def symmetrise_mean(mu: jnp.ndarray, ops: Tuple[jnp.ndarray, ...]) -> jnp.ndarray:
+    """
+    Project the mean onto the trivial character (+,+,+,+) so it is G-invariant.
+    mu: (1, d) row vector (same shape you already use)
+    """
+    P_triv = projector(chR=+1, chTx=+1, chTy=+1, chTz=+1, ops=ops)  # (d,d), self-adjoint
+    return mu @ P_triv  # (1,d)
 
 # ------------------------------------------------------------------ #
 #               Main data processing and saving routine              #
