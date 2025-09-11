@@ -3,7 +3,7 @@ dim: 3
 
 data:
   cache_path: "data_cache"                   # path to put all the saved data
-  filename: "reduced_data"                   # filename for reduced data (assume data files are in data_cache)
+  filename: "reduced_symm"                   # filename for reduced data (assume data files are in data_cache)
 
   reduction:  # settings for reduction map of original data
     seed: 123

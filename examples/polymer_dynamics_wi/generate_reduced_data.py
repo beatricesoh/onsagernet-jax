@@ -69,7 +69,9 @@ def top_eigvec(S: jnp.ndarray) -> Tuple[jnp.ndarray, float]:
 # -------------- Build symmetric principal components -------------- #
 
 def build_two_PCs(
-    X: jnp.ndarray, eps: float = 1e-12
+    X: jnp.ndarray,
+    symm_cov: bool = True,
+    symm_mean: bool = True,
 ) -> Tuple[jnp.ndarray, jnp.ndarray,
            Callable[[jnp.ndarray], jnp.ndarray],
            Callable[[jnp.ndarray], jnp.ndarray],
@@ -80,16 +82,21 @@ def build_two_PCs(
     P1 = projector(chR=-1, chTx=-1, chTy=+1, chTz=+1, ops=ops)   # PC-1 sector
     P2 = projector(chR=+1, chTx=-1, chTy=+1, chTz=+1, ops=ops)   # PC-2 sector
 
-    # --- Symmetrised centering (mean in the trivial sector) ---
-    mu_raw = X.mean(axis=0, keepdims=True)          # (1, d)
-    mu = symmetrise_mean(mu_raw, ops)               # (1, d) G-invariant mean
+    mu = X.mean(axis=0, keepdims=True)          # (1, d)
+    if symm_mean:
+        # --- Symmetrised centering (mean in the trivial sector) ---
+        mu = symmetrise_mean(mu, ops)               # (1, d) G-invariant mean
+    else:
+        mu = mu.at[:, 0::3].set(0.0)
+
     Xc = X - mu
 
     # Raw covariance
-    Sigma_raw = Xc.T @ Xc / (len(X) - 1)            # (d, d)
+    Sigma = Xc.T @ Xc / (len(X) - 1)            # (d, d)
 
-    # --- Symmetrise covariance over the group ---
-    Sigma = symmetrize_covariance(Sigma_raw, ops)   # (d, d)
+    if symm_cov:
+        # --- Symmetrise covariance over the group ---
+        Sigma = symmetrize_covariance(Sigma, ops)   # (d, d)
 
     # PCs inside symmetry sectors
     v1, _ = top_eigvec(P1 @ Sigma @ P1)
