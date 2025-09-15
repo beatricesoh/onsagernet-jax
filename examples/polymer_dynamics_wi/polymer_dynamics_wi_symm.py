@@ -25,34 +25,77 @@ import logging
 from omegaconf import DictConfig
 from onsagernet.dynamics import SDE
 
-# Add symmetric wrapper classes (input transformation approach)
+# Add symmetric wrapper classes (correct parity implementation)
 class SymmetricPotential(eqx.Module):
     base: PotentialResMLP
 
     def __call__(self, x, args):
-        # Transform input: use absolutes for x1 and x2 (y and z)
-        transformed_x = jnp.array([x[0], jnp.abs(x[1]), jnp.abs(x[2])])
+        # Transform input to ensure V is even in x2, x3: V(x) = φ(x1, x2², x3²)
+        transformed_x = jnp.array([x[0], x[1]**2, x[2]**2])
         return self.base(transformed_x, args)
 
 class SymmetricDissipation(eqx.Module):
     base: DissipationMatrixMLP
 
     def __call__(self, x, args):
-        transformed_x = jnp.array([x[0], jnp.abs(x[1]), jnp.abs(x[2])])
-        return self.base(transformed_x, args)
+        # Use even inputs for the base network so base outputs are even functions
+        even_input = jnp.array([x[0], x[1]**2, x[2]**2])
+        M_base = self.base(even_input, args)
+
+        # Ensure symmetry robustly (in case base is numerically not exactly symmetric)
+        M_base = 0.5 * (M_base + M_base.T)
+
+        # Build a diagonal congruence transform D that introduces the required parity
+        # - D[0] = 1 (leave first coord even)
+        # - D[1] carries the sign of x[1] so M_{01} and M_{12} acquire the correct parity
+        # - D[2] carries the sign of x[2]
+        # Use sqrt(abs(x_i) + eps) so D is nonzero and the congruence preserves PD.
+        eps = 1e-8
+        d0 = 1.0
+        d1 = jnp.sign(x[1]) * jnp.sqrt(jnp.abs(x[1]) + eps)
+        d2 = jnp.sign(x[2]) * jnp.sqrt(jnp.abs(x[2]) + eps)
+        D = jnp.array([d0, d1, d2])
+
+        # Congruence transform: M = D M_base D  (implemented via outer multiplications)
+        M = (D[:, None] * M_base) * D[None, :]
+
+        return M
 
 class SymmetricConservation(eqx.Module):
     base: ConservationMatrixMLP
 
     def __call__(self, x, args):
-        transformed_x = jnp.array([x[0], jnp.abs(x[1]), jnp.abs(x[2])])
-        return self.base(transformed_x, args)
+        # Get the base matrix from even inputs (x1, x2², x3²)
+        even_input = jnp.array([x[0], x[1]**2, x[2]**2])
+        W_base = self.base(even_input, args)
+
+        # For antisymmetric W, we need:
+        # - W12, W13: odd components
+        # - W23: even component
+        # - diagonals: zero
+
+        # Extract components from base matrix
+        # Note: W_base is antisymmetric, so W_base[1,2] = -W_base[2,1]
+        W12_odd = x[1] * W_base[0, 1]  # x[1] * even_function
+        W13_odd = x[2] * W_base[0, 2]  # x[2] * even_function
+        # For W23, since it's even and W is antisymmetric, we take the symmetric part
+        W23_even = W_base[1, 2]  # This should be even under the transformation
+
+        # Construct antisymmetric W matrix with correct parity
+        W = jnp.array([
+            [0.0, W12_odd, W13_odd],
+            [-W12_odd, 0.0, W23_even],
+            [-W13_odd, -W23_even, 0.0]
+        ])
+
+        return W
 
 class SymmetricDiffusion(eqx.Module):
     base: DiffusionMLP
 
     def __call__(self, x, args):
-        transformed_x = jnp.array([x[0], jnp.abs(x[1]), jnp.abs(x[2])])
+        # Transform input to even coordinates for consistency
+        transformed_x = jnp.array([x[0], x[1]**2, x[2]**2])
         return self.base(transformed_x, args)
 
 

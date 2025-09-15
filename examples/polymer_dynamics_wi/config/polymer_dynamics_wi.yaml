@@ -8,8 +8,8 @@ data:
   reduction:  # settings for reduction map of original data
     seed: 123
     # Source datasets on huggingface hub
-    pca_dataset: "MLDS-NUS/Wis_ParamSweep_New"    # Source dataset for PCA fitting
-    train_dataset: "MLDS-NUS/Wis_ParamSweep_New" # Dataset for training data transformation
+    pca_dataset: "MLDS-NUS/Wis_ParamSweep"    # Source dataset for PCA fitting
+    train_dataset: "MLDS-NUS/Wis_ParamSweep" # Dataset for training data transformation
     test_dataset: "MLDS-NUS/Wis_Holdout"     # Dataset for test data transformation
 
     # Processing parameters
