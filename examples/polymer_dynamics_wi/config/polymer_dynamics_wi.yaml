@@ -3,7 +3,7 @@ dim: 3
 
 data:
   cache_path: "data_cache"                   # path to put all the saved data
-  filename: "reduced_symm"                   # filename for reduced data (assume data files are in data_cache)
+  filename: "reduced_symm_log"                   # filename for reduced data (assume data files are in data_cache)
 
   reduction:  # settings for reduction map of original data
     seed: 123
@@ -18,7 +18,7 @@ data:
     samples_per_batch: 64                   # Number of samples to select per batch
 
     # Transformation options
-    arg_transform: null                     # Args transformation: null (none), "log", or "scale"
+    arg_transform: log                     # Args transformation: null (none), "log", or "scale"
     scale_factor: 1.0                       # Scale factor for "scale" transformation (default: 1.0)
 
     # Processing control
