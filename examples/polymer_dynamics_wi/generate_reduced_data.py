@@ -200,7 +200,8 @@ def sample_pca_data(
     samples_per_batch: int = 64,
     seed: int = 0,
     cache_path: Optional[str] = None,
-    filename: Optional[str] = None
+    filename: Optional[str] = None,
+    split: Optional[str] = "train",
 ) -> jnp.ndarray:
     """
     Load dataset and perform stratified sampling by extension lengths
@@ -226,11 +227,16 @@ def sample_pca_data(
 
     # Load the specified dataset
     data = load_dataset(dataset_name).with_format("numpy")
-    # Concatenate all available splits
-    all_splits = []
-    for split_name in data.keys():
-        all_splits.append(data[split_name])
-    data = concatenate_datasets(all_splits)
+    # Choose splits
+    if split:
+        # use split if given
+        data = data[split]
+    else:
+        # Else, concatenate all available splits
+        all_splits = []
+        for split_name in data.keys():
+            all_splits.append(data[split_name])
+        data = concatenate_datasets(all_splits)
 
     x_data = []
     total_batches = len(data)//batch_size + (1 if len(data) % batch_size != 0 else 0)
@@ -553,6 +559,8 @@ def main(config: DictConfig) -> None:
 
         # Processing train data
         logging.info("Processing train data...")
+        train_splits = config.data.reduction.train_splits
+        train_data = concatenate_datasets([train_data[split] for split in train_splits])
         train_data_pca = transform_dataset(train_data)
         logging.info(f"Modify trajectory length to {config.data.reduction.train_traj_len}...")
         train_data_pca = shrink_and_concatenate(train_data_pca, new_traj_len=config.data.reduction.train_traj_len)

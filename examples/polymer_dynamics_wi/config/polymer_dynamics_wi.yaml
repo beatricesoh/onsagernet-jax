@@ -11,6 +11,10 @@ data:
     pca_dataset: "MLDS-NUS/Wis_ParamSweep"    # Source dataset for PCA fitting
     train_dataset: "MLDS-NUS/Wis_ParamSweep" # Dataset for training data transformation
     test_dataset: "MLDS-NUS/Wis_Holdout"     # Dataset for test data transformation
+    train_splits:
+      - "train"
+      - "train_slow"
+      - "train_low"
 
     # Processing parameters
     batch_size: 32                          # Batch size for processing PCA source data
