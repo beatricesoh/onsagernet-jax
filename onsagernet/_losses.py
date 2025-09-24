@@ -6,7 +6,7 @@ This module contains custom loss functions for training the models.
 The case class `Loss` is an abstract class that defines the interface for loss functions.
 Sub-classes must implement the `Loss.compute_sample_loss` method.
 
-# """
+#"""
 
 import jax
 import equinox as eqx
@@ -183,3 +183,40 @@ class CompareLoss(Loss):
         recon_loss_pca = jnp.mean((x - x_recon_pca) ** 2)
 
         return jax.nn.relu(jnp.log(recon_loss_model) - jnp.log(recon_loss_pca))
+
+
+class H1Loss(Loss):
+
+    def compute_sample_loss(
+        self, model: eqx.Module, x: ArrayLike, args: ArrayLike
+    ) -> float:
+        """Compute Sobolev regulariser for a single sample trajectory or batch of states.
+
+        Args:
+            model (SDE): model exposing `.potential`, `.dissipation`, `.conservation` callables
+            x (ArrayLike): array of states with leading time axis: (T, d)
+            args (ArrayLike): array of args with leading time axis: (T, m)
+
+        Returns:
+            float: scalar regulariser value for the sample
+        """
+        x = jnp.asarray(x)
+        args = jnp.asarray(args)
+
+        grad_model = jax.grad(model, argnums=0)
+
+        return jnp.sum(grad_model**2)
+
+
+class ScaleLoss(Loss):
+
+    def __init__(self, scale: float):
+        self.scale = scale
+
+    def compute_sample_loss(
+        self, model: eqx.Module, x: ArrayLike, args: ArrayLike
+    ) -> float:
+        x = jnp.asarray(x)
+        args = jnp.asarray(args)
+
+        return (model(x, args) - self.scale) ** 2
