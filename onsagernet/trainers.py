@@ -92,7 +92,7 @@ from jax.tree_util import tree_map
 
 from tqdm import tqdm
 
-from ._losses import MLELoss, ReconLoss, CompareLoss
+from ._losses import MLELoss, ReconLoss, CompareLoss, H1Loss, ScaleLoss
 
 # ------------------------- Typing imports ------------------------- #
 
@@ -121,7 +121,7 @@ class SDETrainer(ABC):
         rop_options: dict,
         loss_options: Optional[dict] = None,
         data_augmentation: Optional[Any] = None,
-        augmentation_prob: float = 0.5
+        augmentation_prob: float = 0.5,
     ) -> None:
         """SDE training routine.
 
@@ -181,7 +181,7 @@ class SDETrainer(ABC):
     def _apply_augmentation(
         self,
         key: jax.random.PRNGKey,
-        data_batch: tuple[ArrayLike, ArrayLike, ArrayLike]
+        data_batch: tuple[ArrayLike, ArrayLike, ArrayLike],
     ) -> tuple[ArrayLike, ArrayLike, ArrayLike]:
         """Apply data augmentation to a batch if configured.
 
@@ -203,6 +203,7 @@ class SDETrainer(ABC):
         def make_augment_fn(aug_key_captured, augmentation):
             def augment_fn(data):
                 return augmentation(aug_key_captured, *data)
+
             return augment_fn
 
         def no_augment_fn(data):
@@ -275,10 +276,12 @@ class SDETrainer(ABC):
         num_batches = dataset.num_rows // batch_size
         keys = jax.random.split(key, num_batches)
 
-        for i, batch in enumerate(tqdm(
-            dataset.iter(batch_size),
-            total=num_batches,
-        )):
+        for i, batch in enumerate(
+            tqdm(
+                dataset.iter(batch_size),
+                total=num_batches,
+            )
+        ):
             data_batch = (batch["t"], batch["x"], batch["args"])
             model, train_loss, opt_state = self._make_step(
                 model, data_batch, opt, opt_state, filter_spec, keys[i]
@@ -434,4 +437,40 @@ class ClosureMLETrainer(MLETrainer):
             loss_sde
             + self._loss_options["recon_weight"] * loss_recon
             + self._loss_options["compare_weight"] * loss_compare
+        )
+
+
+class RegMLETrainer(SDETrainer):
+
+    @eqx.filter_jit
+    def loss_func(
+        self,
+        diff_model: DynamicModel,
+        static_model: DynamicModel,
+        t: ArrayLike,
+        x: ArrayLike,
+        args: ArrayLike,
+    ) -> float:
+        """The MLE loss function.
+
+        See [`MLELoss`](./_losses.html#MLELoss) for more details.
+
+        Args:
+            diff_model (DynamicModel): the trainable part of the model
+            static_model (DynamicModel): the static part of the model
+            t (ArrayLike): time
+            x (ArrayLike): state
+            args (ArrayLike): additional arguments or parameters.
+
+        Returns:
+            float: the computed loss
+        """
+        model = eqx.combine(diff_model, static_model)
+        loss_mle = MLELoss()(model, t, x, args)
+        loss_scale = ScaleLoss()(model.drift.potential, x, args)
+        loss_h1 = H1Loss()(model.drift.potential, x, args)
+        return (
+            loss_mle
+            + self._loss_options["scale_weight"] * loss_scale
+            + self._loss_options["h1_weight"] * loss_h1
         )
