@@ -92,7 +92,7 @@ from jax.tree_util import tree_map
 
 from tqdm import tqdm
 
-from ._losses import MLELoss, ReconLoss, CompareLoss, H1Loss, ScaleLoss, L2Loss
+from ._losses import MLELoss, ReconLoss, CompareLoss, H1Loss, L2Loss, AlignmentLoss
 
 # ------------------------- Typing imports ------------------------- #
 
@@ -472,10 +472,12 @@ class RegularisedMLETrainer(SDETrainer):
         loss_h1_V = H1Loss()(model.potential, x, args)
         loss_l2_M = L2Loss()(model.dissipation, x, args)
         loss_l2_W = L2Loss()(model.conservation, x, args)
+        loss_align = AlignmentLoss()(model, x, args)
         return (
             loss_mle
             + self._loss_options["l2_weight_M"] * loss_l2_M
             + self._loss_options["l2_weight_W"] * loss_l2_W
             + self._loss_options["l2_weight_V"] * loss_l2_V
             + self._loss_options["h1_weight_V"] * loss_h1_V
+            + self._loss_options["align_weight"] * loss_align
         )
