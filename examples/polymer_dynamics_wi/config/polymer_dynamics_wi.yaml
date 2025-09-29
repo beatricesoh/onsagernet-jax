@@ -91,6 +91,7 @@ train:
     l2_weight_W: 1e-3
     h1_weight_V: 1e-3
     l2_weight_V: 1e-5
+    align_weight: 1e-3
 
 hydra:
   run:
