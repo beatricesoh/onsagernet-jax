@@ -17,6 +17,7 @@ from onsagernet.models import (
 )
 
 from onsagernet.trainers import MLETrainer
+from onsagernet.trainers import RegularisedMLETrainer
 
 import hydra
 import logging
@@ -25,21 +26,30 @@ import logging
 from omegaconf import DictConfig
 from onsagernet.dynamics import SDE
 
+
 # Add symmetric wrapper classes (correct parity implementation)
+
+
+def make_even(x):
+    return jnp.array([x[0], x[1] ** 2, x[2] ** 2])
+
+
 class SymmetricPotential(eqx.Module):
     base: PotentialResMLP
 
     def __call__(self, x, args):
         # Transform input to ensure V is even in x2, x3: V(x) = φ(x1, x2², x3²)
-        transformed_x = jnp.array([x[0], x[1]**2, x[2]**2])
+        transformed_x = make_even(x)
+
         return self.base(transformed_x, args)
+
 
 class SymmetricDissipation(eqx.Module):
     base: DissipationMatrixMLP
 
     def __call__(self, x, args):
         # Use even inputs for the base network so base outputs are even functions
-        even_input = jnp.array([x[0], x[1]**2, x[2]**2])
+        even_input = make_even(x)
         M_base = self.base(even_input, args)
 
         # Ensure symmetry robustly (in case base is numerically not exactly symmetric)
@@ -61,12 +71,13 @@ class SymmetricDissipation(eqx.Module):
 
         return M
 
+
 class SymmetricConservation(eqx.Module):
     base: ConservationMatrixMLP
 
     def __call__(self, x, args):
         # Get the base matrix from even inputs (x1, x2², x3²)
-        even_input = jnp.array([x[0], x[1]**2, x[2]**2])
+        even_input = make_even(x)
         W_base = self.base(even_input, args)
 
         # For antisymmetric W, we need:
@@ -82,20 +93,23 @@ class SymmetricConservation(eqx.Module):
         W23_even = W_base[1, 2]  # This should be even under the transformation
 
         # Construct antisymmetric W matrix with correct parity
-        W = jnp.array([
-            [0.0, W12_odd, W13_odd],
-            [-W12_odd, 0.0, W23_even],
-            [-W13_odd, -W23_even, 0.0]
-        ])
+        W = jnp.array(
+            [
+                [0.0, W12_odd, W13_odd],
+                [-W12_odd, 0.0, W23_even],
+                [-W13_odd, -W23_even, 0.0],
+            ]
+        )
 
         return W
+
 
 class SymmetricDiffusion(eqx.Module):
     base: DiffusionMLP
 
     def __call__(self, x, args):
         # Transform input to even coordinates for consistency
-        transformed_x = jnp.array([x[0], x[1]**2, x[2]**2])
+        transformed_x = make_even(x)
         return self.base(transformed_x, args)
 
 
@@ -189,7 +203,7 @@ def train_model(config: DictConfig) -> None:
     dataset = load_from_disk(train_path).with_format("jax")
     # dataset = load_and_process_data(config)
     logger.info(f"Loaded training dataset from {train_path}")
-    logger.info("="*60)
+    logger.info("=" * 60)
 
     # Build the model using the configuration and dataset
     logger.info("Building model...")
@@ -200,17 +214,19 @@ def train_model(config: DictConfig) -> None:
         model_path = config.model.load_model
         logger.info(f"Loading model from {model_path}...")
         model = eqx.tree_deserialise_leaves(model_path, model)
-    logger.info("="*60)
+    logger.info("=" * 60)
 
     # Initialize the MLE trainer with configuration options
-    trainer = MLETrainer(
+    # trainer = MLETrainer(
+    trainer = RegularisedMLETrainer(
         opt_options=config.train.opt,
         rop_options=config.train.rop,
+        loss_options=config.train.loss,
     )
 
     # Start training the model using the trainer
     logger.info(f"Training OnsagerNet for {config.train.num_epochs} epochs...")
-    logger.info("="*60)
+    logger.info("=" * 60)
 
     # Create a random key for augmentation
     training_key = jax.random.PRNGKey(config.train.get("seed", 123))

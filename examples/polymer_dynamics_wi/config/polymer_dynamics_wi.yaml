@@ -3,14 +3,14 @@ dim: 3
 
 data:
   cache_path: "data_cache"                   # path to put all the saved data
-  filename: "reduced_symm_log"                   # filename for reduced data (assume data files are in data_cache)
+  filename: "reduced_symm_log_new"                   # filename for reduced data (assume data files are in data_cache)
 
   reduction:  # settings for reduction map of original data
     seed: 123
     # Source datasets on huggingface hub
-    pca_dataset: "MLDS-NUS/Wis_ParamSweep"    # Source dataset for PCA fitting
-    train_dataset: "MLDS-NUS/Wis_ParamSweep" # Dataset for training data transformation
-    test_dataset: "MLDS-NUS/Wis_Holdout"     # Dataset for test data transformation
+    pca_dataset: "MLDS-NUS/Wis_ParamSweep_New"    # Source dataset for PCA fitting
+    train_dataset: "MLDS-NUS/Wis_ParamSweep_New" # Dataset for training data transformation
+    test_dataset: "MLDS-NUS/Wis_Holdout_New"     # Dataset for test data transformation
     train_splits:
       - "train"
       - "train_slow"
@@ -86,6 +86,11 @@ train:
     min_scale: 1.0e-5
     accumulation_size: 2000
   aug_prob: 0.5  # data augmentation probability
+  loss:
+    l2_weight_M: 1e-3
+    l2_weight_W: 1e-3
+    h1_weight_V: 1e-3
+    l2_weight_V: 1e-5
 
 hydra:
   run:

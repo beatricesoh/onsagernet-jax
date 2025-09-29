@@ -15,7 +15,7 @@ from abc import abstractmethod
 from jax.scipy.stats import multivariate_normal
 from jax.typing import ArrayLike
 from jax import Array
-from .dynamics import SDE, ReducedSDE
+from .dynamics import SDE, ReducedSDE, OnsagerNet
 
 
 class Loss(eqx.Module):
@@ -185,27 +185,25 @@ class CompareLoss(Loss):
         return jax.nn.relu(jnp.log(recon_loss_model) - jnp.log(recon_loss_pca))
 
 
+class L2Loss(Loss):
+
+    def compute_sample_loss(
+        self, model: eqx.Module, x: ArrayLike, args: ArrayLike
+    ) -> float:
+        x = jnp.asarray(x)
+        args = jnp.asarray(args)
+        model_outputs = model(x, args)
+        return jnp.linalg.norm(model_outputs) ** 2
+
+
 class H1Loss(Loss):
 
     def compute_sample_loss(
         self, model: eqx.Module, x: ArrayLike, args: ArrayLike
     ) -> float:
-        """Compute Sobolev regulariser for a single sample trajectory or batch of states.
-
-        Args:
-            model (SDE): model exposing `.potential`, `.dissipation`, `.conservation` callables
-            x (ArrayLike): array of states with leading time axis: (T, d)
-            args (ArrayLike): array of args with leading time axis: (T, m)
-
-        Returns:
-            float: scalar regulariser value for the sample
-        """
-        x = jnp.asarray(x)
-        args = jnp.asarray(args)
-
         grad_model = jax.grad(model, argnums=0)
-
-        return jnp.sum(grad_model**2)
+        grad_model_outputs = grad_model(x, args)
+        return jnp.linalg.norm(grad_model_outputs) ** 2
 
 
 class ScaleLoss(Loss):
@@ -218,5 +216,25 @@ class ScaleLoss(Loss):
     ) -> float:
         x = jnp.asarray(x)
         args = jnp.asarray(args)
+        return jnp.linalg.norm(model(x, args) - self.scale) ** 2
 
-        return (model(x, args) - self.scale) ** 2
+
+class AlignmentLoss(Loss):
+
+    def compute_sample_loss(
+        self, model: OnsagerNet, x: ArrayLike, args: ArrayLike
+    ) -> float:
+        x = jnp.asarray(x)
+        args = jnp.asarray(args)
+        grad_V = jax.grad(model.potential)(x, args)
+        grad_V_norm = jnp.linalg.norm(grad_V)
+        u = grad_V / (grad_V_norm + 1e-10)
+
+        M = model.dissipation(x, args)
+        W = model.conservation(x, args)
+        A = M + W
+
+        projector = jnp.eye(A.shape[-1]) - jnp.einsum("i,j->ij", u, u)  # I - u u^T
+        align_vec = projector @ A @ u
+
+        return jnp.linalg.norm(align_vec) ** 2

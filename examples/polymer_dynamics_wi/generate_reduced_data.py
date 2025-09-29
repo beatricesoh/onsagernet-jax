@@ -11,6 +11,7 @@ from datasets import load_dataset, concatenate_datasets, Dataset
 from omegaconf import DictConfig
 from examples.utils.data import shrink_and_concatenate
 from examples.utils.data import get_path
+from pathlib import Path
 
 
 # ------------------------------------------------------------------ #
@@ -19,45 +20,80 @@ from examples.utils.data import get_path
 
 # ----------------- Build symmetry linear operators ---------------- #
 
-def make_ops(n: int = 300) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    idx_x = jnp.arange(0, 3*n, 3)
-    idx_y = jnp.arange(1, 3*n, 3)
-    idx_z = jnp.arange(2, 3*n, 3)
 
-    I  = jnp.eye(3*n)
-    J  = jnp.flipud(jnp.eye(n))
-    R  = jnp.kron(J, jnp.eye(3))
+def make_ops(
+    n: int = 300,
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    idx_x = jnp.arange(0, 3 * n, 3)
+    idx_y = jnp.arange(1, 3 * n, 3)
+    idx_z = jnp.arange(2, 3 * n, 3)
 
-    Tx = jnp.eye(3*n).at[idx_x, idx_x].set(-1)
-    Ty = jnp.eye(3*n).at[idx_y, idx_y].set(-1)
-    Tz = jnp.eye(3*n).at[idx_z, idx_z].set(-1)
+    I = jnp.eye(3 * n)
+    J = jnp.flipud(jnp.eye(n))
+    R = jnp.kron(J, jnp.eye(3))
+
+    Tx = jnp.eye(3 * n).at[idx_x, idx_x].set(-1)
+    Ty = jnp.eye(3 * n).at[idx_y, idx_y].set(-1)
+    Tz = jnp.eye(3 * n).at[idx_z, idx_z].set(-1)
     return I, R, Tx, Ty, Tz
+
 
 # ----------------- projector for a given character ---------------- #
 
-def projector(chR: int, chTx: int, chTy: int, chTz: int, ops: Optional[Tuple[jnp.ndarray, ...]] = None) -> jnp.ndarray:
+
+def projector(
+    chR: int,
+    chTx: int,
+    chTy: int,
+    chTz: int,
+    ops: Optional[Tuple[jnp.ndarray, ...]] = None,
+) -> jnp.ndarray:
     if ops is None:
         I, R, Tx, Ty, Tz = make_ops()
     else:
         I, R, Tx, Ty, Tz = ops
 
-    ops_list = [I, R, Tx, Ty, Tz,
-           R@Tx, R@Ty, R@Tz,
-           Tx@Ty, Tx@Tz, Ty@Tz,
-           R@Tx@Ty, R@Tx@Tz, R@Ty@Tz, Tx@Ty@Tz,
-           R@Tx@Ty@Tz]
+    ops_list = [
+        I,
+        R,
+        Tx,
+        Ty,
+        Tz,
+        R @ Tx,
+        R @ Ty,
+        R @ Tz,
+        Tx @ Ty,
+        Tx @ Tz,
+        Ty @ Tz,
+        R @ Tx @ Ty,
+        R @ Tx @ Tz,
+        R @ Ty @ Tz,
+        Tx @ Ty @ Tz,
+        R @ Tx @ Ty @ Tz,
+    ]
     signs = [
         1,
-        chR, chTx, chTy, chTz,
-        chR*chTx, chR*chTy, chR*chTz,
-        chTx*chTy, chTx*chTz, chTy*chTz,
-        chR*chTx*chTy, chR*chTx*chTz, chR*chTy*chTz, chTx*chTy*chTz,
-        chR*chTx*chTy*chTz
+        chR,
+        chTx,
+        chTy,
+        chTz,
+        chR * chTx,
+        chR * chTy,
+        chR * chTz,
+        chTx * chTy,
+        chTx * chTz,
+        chTy * chTz,
+        chR * chTx * chTy,
+        chR * chTx * chTz,
+        chR * chTy * chTz,
+        chTx * chTy * chTz,
+        chR * chTx * chTy * chTz,
     ]
-    return 0.0625 * sum(s*o for s, o in zip(signs, ops_list))  # 1/16 factor
+    return 0.0625 * sum(s * o for s, o in zip(signs, ops_list))  # 1/16 factor
 
 
 # ----------- dominant eigenvector of a symmetric matrix ----------- #
+
 
 def top_eigvec(S: jnp.ndarray) -> Tuple[jnp.ndarray, float]:
     vals, vecs = jnp.linalg.eigh(S)
@@ -68,35 +104,39 @@ def top_eigvec(S: jnp.ndarray) -> Tuple[jnp.ndarray, float]:
 
 # -------------- Build symmetric principal components -------------- #
 
+
 def build_two_PCs(
     X: jnp.ndarray,
     symm_cov: bool = True,
     symm_mean: bool = True,
-) -> Tuple[jnp.ndarray, jnp.ndarray,
-           Callable[[jnp.ndarray], jnp.ndarray],
-           Callable[[jnp.ndarray], jnp.ndarray],
-           Tuple[float, float]]:
+) -> Tuple[
+    jnp.ndarray,
+    jnp.ndarray,
+    Callable[[jnp.ndarray], jnp.ndarray],
+    Callable[[jnp.ndarray], jnp.ndarray],
+    Tuple[float, float],
+]:
 
     # Generators & character projectors
     ops = make_ops()
-    P1 = projector(chR=-1, chTx=-1, chTy=+1, chTz=+1, ops=ops)   # PC-1 sector
-    P2 = projector(chR=+1, chTx=-1, chTy=+1, chTz=+1, ops=ops)   # PC-2 sector
+    P1 = projector(chR=-1, chTx=-1, chTy=+1, chTz=+1, ops=ops)  # PC-1 sector
+    P2 = projector(chR=+1, chTx=-1, chTy=+1, chTz=+1, ops=ops)  # PC-2 sector
 
-    mu = X.mean(axis=0, keepdims=True)          # (1, d)
+    mu = X.mean(axis=0, keepdims=True)  # (1, d)
     if symm_mean:
         # --- Symmetrised centering (mean in the trivial sector) ---
-        mu = symmetrise_mean(mu, ops)               # (1, d) G-invariant mean
+        mu = symmetrise_mean(mu, ops)  # (1, d) G-invariant mean
     else:
         mu = mu.at[:, 0::3].set(0.0)
 
     Xc = X - mu
 
     # Raw covariance
-    Sigma = Xc.T @ Xc / (len(X) - 1)            # (d, d)
+    Sigma = Xc.T @ Xc / (len(X) - 1)  # (d, d)
 
     if symm_cov:
         # --- Symmetrise covariance over the group ---
-        Sigma = symmetrize_covariance(Sigma, ops)   # (d, d)
+        Sigma = symmetrize_covariance(Sigma, ops)  # (d, d)
 
     # PCs inside symmetry sectors
     v1, _ = top_eigvec(P1 @ Sigma @ P1)
@@ -107,7 +147,7 @@ def build_two_PCs(
     v2 = P2 @ v2
     v2 = v2 / jnp.linalg.norm(v2)
 
-    P = jnp.vstack([v1, v2])                        # (2, d)
+    P = jnp.vstack([v1, v2])  # (2, d)
 
     # Variances on centered *raw* data (fine for whitening)
     raw_projected = (P @ Xc.T).T
@@ -125,6 +165,7 @@ def build_two_PCs(
         return (Z_unwhitened @ P) + mu
 
     return P, mu, encode, decode, (lam1, lam2)
+
 
 # def build_two_PCs(X: jnp.ndarray, eps: float = 1e-12) -> Tuple[jnp.ndarray, jnp.ndarray, Callable[[jnp.ndarray], jnp.ndarray], Callable[[jnp.ndarray], jnp.ndarray], Tuple[float, float]]:
 #     """
@@ -186,6 +227,7 @@ def build_two_PCs(
 #          Data processing and stratified sampling functions         #
 # ------------------------------------------------------------------ #
 
+
 @jax.jit
 def get_extension(x: jnp.ndarray) -> float:
     x = x.reshape(-1, 3)
@@ -219,7 +261,9 @@ def sample_pca_data(
             return x_data
 
     # If no cached data, proceed with processing
-    logging.info(f"No cached data found. Loading and processing data from: {dataset_name}")
+    logging.info(
+        f"No cached data found. Loading and processing data from: {dataset_name}"
+    )
 
     # Set random seed for reproducibility
     np.random.seed(seed)
@@ -239,7 +283,7 @@ def sample_pca_data(
         data = concatenate_datasets(all_splits)
 
     x_data = []
-    total_batches = len(data)//batch_size + (1 if len(data) % batch_size != 0 else 0)
+    total_batches = len(data) // batch_size + (1 if len(data) % batch_size != 0 else 0)
 
     # Process data in streaming fashion to minimize memory usage
     for batch_idx, d in enumerate(tqdm(data.iter(batch_size), total=total_batches)):
@@ -250,7 +294,9 @@ def sample_pca_data(
         # Stratified sampling by extension lengths
         # Bin the extensions into bins
         bins = jnp.linspace(extensions.min(), extensions.max(), num_bins + 1)
-        bin_indices = jnp.digitize(extensions, bins) - 1  # bin_indices in [0, num_bins-1]
+        bin_indices = (
+            jnp.digitize(extensions, bins) - 1
+        )  # bin_indices in [0, num_bins-1]
         x_chosen = []
         for i in range(num_bins):
             idx_in_bin = jnp.where(bin_indices == i)[0]
@@ -269,8 +315,12 @@ def sample_pca_data(
                 mask = mask.at[jnp.where((x == arr).all(axis=1))[0][0]].set(False)
             remaining_indices = all_indices[mask]
             if len(remaining_indices) > 0:
-                extra_idx = np.random.choice(remaining_indices, size=min(remaining, len(remaining_indices)), replace=False)
-                x_chosen.extend([x[i:i+1] for i in extra_idx])
+                extra_idx = np.random.choice(
+                    remaining_indices,
+                    size=min(remaining, len(remaining_indices)),
+                    replace=False,
+                )
+                x_chosen.extend([x[i : i + 1] for i in extra_idx])
 
         # Convert to jnp array and add to collection
         if x_chosen:
@@ -283,7 +333,9 @@ def sample_pca_data(
         # Periodic memory cleanup and progress reporting
         if (batch_idx + 1) % 100 == 0:
             current_samples = sum(len(chunk) for chunk in x_data)
-            logging.info(f"  Processed {batch_idx + 1}/{total_batches} batches, collected {current_samples} samples")
+            logging.info(
+                f"  Processed {batch_idx + 1}/{total_batches} batches, collected {current_samples} samples"
+            )
 
     # Final concatenation
     x_data = jnp.concatenate(x_data, axis=0)
@@ -302,8 +354,16 @@ def sample_pca_data(
 #         Save and load PCA components (encoder/decoder)            #
 # ------------------------------------------------------------------ #
 
-def save_pca_components(cache_path: str, filename: str, P: jnp.ndarray, mu: jnp.ndarray,
-                       encode: Callable, decode: Callable, lams: Tuple[float, float]) -> None:
+
+def save_pca_components(
+    cache_path: str,
+    filename: str,
+    P: jnp.ndarray,
+    mu: jnp.ndarray,
+    encode: Callable,
+    decode: Callable,
+    lams: Tuple[float, float],
+) -> None:
     """
     Save PCA components (P, mu, eigenvalues) and create encoder/decoder functions.
 
@@ -320,22 +380,25 @@ def save_pca_components(cache_path: str, filename: str, P: jnp.ndarray, mu: jnp.
     components_file = get_path(cache_path, f"{filename}_components.pkl")
 
     components = {
-        'P': np.array(P),
-        'mu': np.array(mu),
-        'eigenvalues': lams,
-        'whitening_scale': 1.0 / np.sqrt(np.array(lams))
+        "P": np.array(P),
+        "mu": np.array(mu),
+        "eigenvalues": lams,
+        "whitening_scale": 1.0 / np.sqrt(np.array(lams)),
     }
 
-    with open(components_file, 'wb') as f:
+    with open(components_file, "wb") as f:
         pickle.dump(components, f)
 
     logging.info(f"Saved PCA components to: {components_file}")
 
 
-def load_pca_components(cache_path: str, filename: str) -> Tuple[jnp.ndarray, jnp.ndarray,
-                                                               Callable[[jnp.ndarray], jnp.ndarray],
-                                                               Callable[[jnp.ndarray], jnp.ndarray],
-                                                               Tuple[float, float]]:
+def load_pca_components(cache_path: str, filename: str) -> Tuple[
+    jnp.ndarray,
+    jnp.ndarray,
+    Callable[[jnp.ndarray], jnp.ndarray],
+    Callable[[jnp.ndarray], jnp.ndarray],
+    Tuple[float, float],
+]:
     """
     Load PCA components and reconstruct encoder/decoder functions.
 
@@ -351,13 +414,13 @@ def load_pca_components(cache_path: str, filename: str) -> Tuple[jnp.ndarray, jn
     if not os.path.exists(components_file):
         raise FileNotFoundError(f"PCA components file not found: {components_file}")
 
-    with open(components_file, 'rb') as f:
+    with open(components_file, "rb") as f:
         components = pickle.load(f)
 
-    P = jnp.array(components['P'])
-    mu = jnp.array(components['mu'])
-    lams = components['eigenvalues']
-    whitening_scale = jnp.array(components['whitening_scale'])
+    P = jnp.array(components["P"])
+    mu = jnp.array(components["mu"])
+    lams = components["eigenvalues"]
+    whitening_scale = jnp.array(components["whitening_scale"])
 
     # Reconstruct encoder and decoder functions
     def encode(X_new: jnp.ndarray) -> jnp.ndarray:
@@ -372,6 +435,7 @@ def load_pca_components(cache_path: str, filename: str) -> Tuple[jnp.ndarray, jn
     logging.info(f"Loaded PCA components from: {components_file}")
     return P, mu, encode, decode, lams
 
+
 # ------------------------------------------------------------------ #
 #                 Symmetrisation of covariance matrix                #
 # ------------------------------------------------------------------ #
@@ -382,44 +446,63 @@ def group_elements_from_ops(ops: Tuple[jnp.ndarray, ...]) -> jnp.ndarray:
     I, R, Tx, Ty, Tz = ops
     elems = [
         I,
-        R, Tx, Ty, Tz,
-        R @ Tx, R @ Ty, R @ Tz,
-        Tx @ Ty, Tx @ Tz, Ty @ Tz,
-        R @ Tx @ Ty, R @ Tx @ Tz, R @ Ty @ Tz, Tx @ Ty @ Tz,
+        R,
+        Tx,
+        Ty,
+        Tz,
+        R @ Tx,
+        R @ Ty,
+        R @ Tz,
+        Tx @ Ty,
+        Tx @ Tz,
+        Ty @ Tz,
+        R @ Tx @ Ty,
+        R @ Tx @ Tz,
+        R @ Ty @ Tz,
+        Tx @ Ty @ Tz,
         R @ Tx @ Ty @ Tz,
     ]
     return jnp.stack(elems, axis=0)  # (16, d, d)
+
 
 def symmetrize_covariance(S: jnp.ndarray, ops: Tuple[jnp.ndarray, ...]) -> jnp.ndarray:
     """
     S_sym = (1/16) * sum_{g in G} U(g) S U(g)^T
     """
-    G = group_elements_from_ops(ops)          # (16, d, d)
+    G = group_elements_from_ops(ops)  # (16, d, d)
     conj = jax.vmap(lambda g: g @ S @ g.T, in_axes=0, out_axes=0)
-    return jnp.mean(conj(G), axis=0)          # (d, d)
+    return jnp.mean(conj(G), axis=0)  # (d, d)
+
 
 def symmetrise_mean(mu: jnp.ndarray, ops: Tuple[jnp.ndarray, ...]) -> jnp.ndarray:
     """
     Project the mean onto the trivial character (+,+,+,+) so it is G-invariant.
     mu: (1, d) row vector (same shape you already use)
     """
-    P_triv = projector(chR=+1, chTx=+1, chTy=+1, chTz=+1, ops=ops)  # (d,d), self-adjoint
+    P_triv = projector(
+        chR=+1, chTx=+1, chTy=+1, chTz=+1, ops=ops
+    )  # (d,d), self-adjoint
     return mu @ P_triv  # (1,d)
+
 
 # ------------------------------------------------------------------ #
 #               Main data processing and saving routine              #
 # ------------------------------------------------------------------ #
 
+
 @hydra.main(version_base=None, config_path="config", config_name="polymer_dynamics_wi")
 def main(config: DictConfig) -> None:
     # Configure logging
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    )
 
     # Step 1: Process and sample data for PCA fitting
     logging.info("=" * 60)
     logging.info("STEP 1: DATA PROCESSING AND SAMPLING")
     logging.info("=" * 60)
 
+    pca_filename = Path(config.data.filename + "_" + config.data.reduction.filename)
     X = sample_pca_data(
         config.data.reduction.pca_dataset,
         batch_size=config.data.reduction.batch_size,
@@ -427,7 +510,7 @@ def main(config: DictConfig) -> None:
         samples_per_batch=config.data.reduction.samples_per_batch,
         seed=config.data.reduction.seed,
         cache_path=config.data.cache_path,
-        filename=config.data.reduction.filename,
+        filename=pca_filename,
     )
 
     # Step 2: Build or load PCA components
@@ -436,11 +519,11 @@ def main(config: DictConfig) -> None:
     logging.info("=" * 60)
 
     # Check if we should load existing PCA components
-    if config.data.reduction.get('load_existing_pca', False):
+    if config.data.reduction.get("load_existing_pca", False):
         try:
             P, mu, encode, decode, lams = load_pca_components(
                 cache_path=config.data.cache_path,
-                filename=config.data.reduction.filename
+                filename=pca_filename,
             )
             logging.info("Successfully loaded existing PCA components")
             # We can skip the X_jax creation and go directly to testing
@@ -462,7 +545,9 @@ def main(config: DictConfig) -> None:
     logging.info(f"PC-1 eigenvalue (variance): {lams[0]:.6f}")
     logging.info(f"PC-2 eigenvalue (variance): {lams[1]:.6f}")
     logging.info(f"Variance ratio (PC-1/PC-2): {lams[0]/lams[1]:.6f}")
-    logging.info(f"Whitening scales: [{1.0/jnp.sqrt(lams[0]):.6f}, {1.0/jnp.sqrt(lams[1]):.6f}]")
+    logging.info(
+        f"Whitening scales: [{1.0/jnp.sqrt(lams[0]):.6f}, {1.0/jnp.sqrt(lams[1]):.6f}]"
+    )
 
     # Test encoder on PCA fitting data
     logging.info("-" * 60)
@@ -485,17 +570,25 @@ def main(config: DictConfig) -> None:
     original_subset = X_jax[:5]
     reconstruction_error = jnp.mean(jnp.square(reconstructed - original_subset))
     logging.info(f"Reconstruction error (MSE): {reconstruction_error:.6f}")
-    logging.info(f"Original data range: [{jnp.min(original_subset):.3f}, {jnp.max(original_subset):.3f}]")
-    logging.info(f"Reconstructed range: [{jnp.min(reconstructed):.3f}, {jnp.max(reconstructed):.3f}]")
+    logging.info(
+        f"Original data range: [{jnp.min(original_subset):.3f}, {jnp.max(original_subset):.3f}]"
+    )
+    logging.info(
+        f"Reconstructed range: [{jnp.min(reconstructed):.3f}, {jnp.max(reconstructed):.3f}]"
+    )
 
     # Save PCA components (encoder/decoder) if we computed new ones
-    if not config.data.reduction.get('load_existing_pca', False):
+    if not config.data.reduction.get("load_existing_pca", False):
         logging.info("-" * 60)
         logging.info("Saving PCA components")
         save_pca_components(
             cache_path=config.data.cache_path,
             filename=config.data.reduction.filename,
-            P=P, mu=mu, encode=encode, decode=decode, lams=lams
+            P=P,
+            mu=mu,
+            encode=encode,
+            decode=decode,
+            lams=lams,
         )
     else:
         logging.info("-" * 60)
@@ -546,7 +639,7 @@ def main(config: DictConfig) -> None:
         return dataset.map(
             lambda batch: {
                 "x": transform_x_vmap(batch["x"]),
-                "args": transform_args_vmap(batch["args"])
+                "args": transform_args_vmap(batch["args"]),
             }
         )
 
@@ -554,39 +647,80 @@ def main(config: DictConfig) -> None:
     if config.data.reduction.skip_train:
         logging.info("Skipping training data processing (skip_train enabled)")
     else:
-        logging.info(f"Loading and transforming train data from: {config.data.reduction.train_dataset}")
-        train_data = load_dataset(config.data.reduction.train_dataset).with_format("numpy")
+        logging.info(
+            f"Loading and transforming train data from: {config.data.reduction.train_dataset}"
+        )
+        train_data = load_dataset(config.data.reduction.train_dataset).with_format(
+            "numpy"
+        )
 
         # Processing train data
         logging.info("Processing train data...")
         train_splits = config.data.reduction.train_splits
         train_data = concatenate_datasets([train_data[split] for split in train_splits])
-        train_data_pca = transform_dataset(train_data)
-        logging.info(f"Modify trajectory length to {config.data.reduction.train_traj_len}...")
-        train_data_pca = shrink_and_concatenate(train_data_pca, new_traj_len=config.data.reduction.train_traj_len)
+
+        # Cache the transformed data
+        transformed_cache_path = get_path(
+            config.data.cache_path, f"{config.data.filename}_train_transformed"
+        )
+        if os.path.exists(transformed_cache_path):
+            logging.info(
+                f"Loading cached transformed train data from: {transformed_cache_path}"
+            )
+            train_data_pca_cached = Dataset.load_from_disk(
+                transformed_cache_path
+            ).with_format("jax")
+            # Use cached data instead
+            train_data_pca = train_data_pca_cached
+        else:
+            logging.info("No cached transformed data found. Transform dataset")
+            train_data_pca = transform_dataset(train_data)
+            logging.info("Saving transformed data to cache...")
+            train_data_pca.save_to_disk(transformed_cache_path)
+            logging.info(
+                f"Saved transformed train data to cache: {transformed_cache_path}"
+            )
+
+        # Release original train data memory
+        del train_data
+
+        logging.info(
+            f"Modify trajectory length to {config.data.reduction.train_traj_len}..."
+        )
+        train_data_pca = shrink_and_concatenate(
+            train_data_pca, new_traj_len=config.data.reduction.train_traj_len
+        )
 
         # Save train data immediately and release memory
-        train_output_path = get_path(config.data.cache_path, f"{config.data.filename}_train")
+        train_output_path = get_path(
+            config.data.cache_path, f"{config.data.filename}_train"
+        )
         logging.info(f"Saving train data to: {train_output_path}")
         train_data_pca.save_to_disk(train_output_path)
 
         # Release train data memory
-        del train_data, train_data_pca
+        del train_data_pca
         logging.info("Train data processed and saved, memory released")
 
     # Now process test dataset (if not skipped)
     if config.data.reduction.skip_test:
         logging.info("Skipping test data processing (skip_test enabled)")
     else:
-        logging.info(f"Loading and transforming test data from: {config.data.reduction.test_dataset}")
-        test_data = load_dataset(config.data.reduction.test_dataset).with_format("numpy")
+        logging.info(
+            f"Loading and transforming test data from: {config.data.reduction.test_dataset}"
+        )
+        test_data = load_dataset(config.data.reduction.test_dataset).with_format(
+            "numpy"
+        )
 
         # Processing test data
         logging.info("Processing test data...")
         test_data_pca = transform_dataset(test_data)
 
         # Save test data
-        test_output_path = get_path(config.data.cache_path, f"{config.data.filename}_test")
+        test_output_path = get_path(
+            config.data.cache_path, f"{config.data.filename}_test"
+        )
         logging.info(f"Saving test data to: {test_output_path}")
         test_data_pca.save_to_disk(test_output_path)
 
@@ -608,6 +742,7 @@ def main(config: DictConfig) -> None:
         logging.info(f"Test data transformed and saved to: {test_output_path}")
     else:
         logging.info("Test data processing skipped")
+
 
 if __name__ == "__main__":
     main()

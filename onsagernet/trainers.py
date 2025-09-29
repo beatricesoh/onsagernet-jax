@@ -92,7 +92,7 @@ from jax.tree_util import tree_map
 
 from tqdm import tqdm
 
-from ._losses import MLELoss, ReconLoss, CompareLoss, H1Loss, ScaleLoss
+from ._losses import MLELoss, ReconLoss, CompareLoss, H1Loss, ScaleLoss, L2Loss
 
 # ------------------------- Typing imports ------------------------- #
 
@@ -440,7 +440,7 @@ class ClosureMLETrainer(MLETrainer):
         )
 
 
-class RegMLETrainer(SDETrainer):
+class RegularisedMLETrainer(SDETrainer):
 
     @eqx.filter_jit
     def loss_func(
@@ -467,10 +467,15 @@ class RegMLETrainer(SDETrainer):
         """
         model = eqx.combine(diff_model, static_model)
         loss_mle = MLELoss()(model, t, x, args)
-        loss_scale = ScaleLoss()(model.drift.potential, x, args)
-        loss_h1 = H1Loss()(model.drift.potential, x, args)
+        # loss_scale = ScaleLoss()(model.drift.potential, x, args)
+        loss_l2_V = L2Loss()(model.potential, x, args)
+        loss_h1_V = H1Loss()(model.potential, x, args)
+        loss_l2_M = L2Loss()(model.dissipation, x, args)
+        loss_l2_W = L2Loss()(model.conservation, x, args)
         return (
             loss_mle
-            + self._loss_options["scale_weight"] * loss_scale
-            + self._loss_options["h1_weight"] * loss_h1
+            + self._loss_options["l2_weight_M"] * loss_l2_M
+            + self._loss_options["l2_weight_W"] * loss_l2_W
+            + self._loss_options["l2_weight_V"] * loss_l2_V
+            + self._loss_options["h1_weight_V"] * loss_h1_V
         )
