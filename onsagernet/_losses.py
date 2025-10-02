@@ -201,9 +201,14 @@ class H1Loss(Loss):
     def compute_sample_loss(
         self, model: eqx.Module, x: ArrayLike, args: ArrayLike
     ) -> float:
-        grad_model = jax.grad(model, argnums=0)
-        grad_model_outputs = grad_model(x, args)
-        return jnp.linalg.norm(grad_model_outputs) ** 2
+        model_outputs, grad_model_outputs = jax.value_and_grad(model, argnums=0)(
+            x, args
+        )
+        # return jnp.linalg.norm(grad_model_outputs) ** 2
+        return (
+            jnp.linalg.norm(model_outputs) ** 2
+            + jnp.linalg.norm(grad_model_outputs) ** 2
+        )
 
 
 class ScaleLoss(Loss):

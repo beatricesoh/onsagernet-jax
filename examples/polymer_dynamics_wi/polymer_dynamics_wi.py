@@ -18,10 +18,10 @@ from onsagernet.models import (
 from onsagernet._augmentations import (
     RandomChoiceAugmentation,
     ReducedHeadTailFlip,
-    ReducedReflectionX
+    ReducedReflectionX,
 )
 
-from onsagernet.trainers import MLETrainer
+from onsagernet.trainers import MLETrainer, RegularisedMLETrainer
 
 import hydra
 import logging
@@ -115,7 +115,7 @@ def train_model(config: DictConfig) -> None:
     dataset = load_from_disk(train_path).with_format("jax")
     # dataset = load_and_process_data(config)
     logger.info(f"Loaded training dataset from {train_path}")
-    logger.info("="*60)
+    logger.info("=" * 60)
 
     # Build the model using the configuration and dataset
     logger.info("Building model...")
@@ -126,7 +126,7 @@ def train_model(config: DictConfig) -> None:
         model_path = config.model.load_model
         logger.info(f"Loading model from {model_path}...")
         model = eqx.tree_deserialise_leaves(model_path, model)
-    logger.info("="*60)
+    logger.info("=" * 60)
 
     # Initialize the MLE trainer with configuration options
     logger.info("Setting up data augmentation...")
@@ -139,18 +139,19 @@ def train_model(config: DictConfig) -> None:
     logger.info("ReducedReflectionX: Flips z2,z3 - [1, -1, -1]")
     logger.info("RandomChoiceAugmentation: Randomly selects one per batch")
     logger.info(f"Augmentation probability: {config.train.aug_prob}")
-    logger.info("="*60)
+    logger.info("=" * 60)
 
-    trainer = MLETrainer(
+    trainer = RegularisedMLETrainer(
         opt_options=config.train.opt,
         rop_options=config.train.rop,
+        loss_options=config.train.loss,
         data_augmentation=aug,
         augmentation_prob=config.train.aug_prob,
     )
 
     # Start training the model using the trainer
     logger.info(f"Training OnsagerNet for {config.train.num_epochs} epochs...")
-    logger.info("="*60)
+    logger.info("=" * 60)
 
     # Create a random key for augmentation
     training_key = jax.random.PRNGKey(config.train.get("seed", 123))
