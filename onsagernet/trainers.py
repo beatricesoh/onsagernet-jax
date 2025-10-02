@@ -477,7 +477,7 @@ class RegularisedMLETrainer(SDETrainer):
             loss_mle
             + self._loss_options["l2_weight_M"] * loss_l2_M
             + self._loss_options["l2_weight_W"] * loss_l2_W
-            + self._loss_options["l2_weight_V"] * loss_l2_V
+            # + self._loss_options["l2_weight_V"] * loss_l2_V
             + self._loss_options["h1_weight_V"] * loss_h1_V
             # + self._loss_options["align_weight"] * loss_align
         )
