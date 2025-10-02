@@ -468,7 +468,7 @@ class RegularisedMLETrainer(SDETrainer):
         model = eqx.combine(diff_model, static_model)
         loss_mle = MLELoss()(model, t, x, args)
         # loss_scale = ScaleLoss()(model.drift.potential, x, args)
-        loss_l2_V = L2Loss()(model.potential, x, args)
+        # loss_l2_V = L2Loss()(model.potential, x, args)
         loss_h1_V = H1Loss()(model.potential, x, args)
         loss_l2_M = L2Loss()(model.dissipation, x, args)
         loss_l2_W = L2Loss()(model.conservation, x, args)
