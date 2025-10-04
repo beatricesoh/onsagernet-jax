@@ -198,15 +198,17 @@ class L2Loss(Loss):
 
 class H1Loss(Loss):
 
+    def __init__(self, l2_factor=1.0):
+        self.l2_factor = l2_factor
+
     def compute_sample_loss(
         self, model: eqx.Module, x: ArrayLike, args: ArrayLike
     ) -> float:
         model_outputs, grad_model_outputs = jax.value_and_grad(model, argnums=0)(
             x, args
         )
-        # return jnp.linalg.norm(grad_model_outputs) ** 2
         return (
-            jnp.linalg.norm(model_outputs) ** 2
+            self.l2_factor * jnp.linalg.norm(model_outputs) ** 2
             + jnp.linalg.norm(grad_model_outputs) ** 2
         )
 
