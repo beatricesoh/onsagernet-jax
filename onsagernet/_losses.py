@@ -197,9 +197,7 @@ class L2Loss(Loss):
 
 
 class H1Loss(Loss):
-
-    def __init__(self, l2_factor=1.0):
-        self.l2_factor = l2_factor
+    l2_factor: float = 1.0
 
     def compute_sample_loss(
         self, model: eqx.Module, x: ArrayLike, args: ArrayLike
@@ -214,9 +212,7 @@ class H1Loss(Loss):
 
 
 class ScaleLoss(Loss):
-
-    def __init__(self, scale: float):
-        self.scale = scale
+    scale: float
 
     def compute_sample_loss(
         self, model: eqx.Module, x: ArrayLike, args: ArrayLike
