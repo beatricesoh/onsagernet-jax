@@ -1,5 +1,6 @@
 import os
 import jax
+import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", True)
 
@@ -15,13 +16,8 @@ from onsagernet.models import (
     DiffusionMLP,
 )
 
-from onsagernet._augmentations import (
-    RandomChoiceAugmentation,
-    ReducedHeadTailFlip,
-    ReducedReflectionX,
-)
-
-from onsagernet.trainers import MLETrainer, RegularisedMLETrainer
+from onsagernet.trainers import MLETrainer
+from onsagernet.trainers import RegularisedMLETrainer
 
 import hydra
 import logging
@@ -29,6 +25,122 @@ import logging
 # ------------------------- Typing imports ------------------------- #
 from omegaconf import DictConfig
 from onsagernet.dynamics import SDE
+
+
+# Add symmetric wrapper classes (correct parity implementation)
+
+
+def make_even(x):
+    return jnp.array([x[0], x[1] ** 2, x[2] ** 2])
+
+
+def get_flips(z):
+    z_flip_2 = z * jnp.array([1.0, -1.0, 1.0])
+    z_flip_3 = z * jnp.array([1.0, 1.0, -1.0])
+    z_flip_2_3 = z * jnp.array([1.0, -1.0, -1.0])
+    return z, z_flip_2, z_flip_3, z_flip_2_3
+
+
+# def call_symmetric(base, x, args):
+#     transformed_xs = jnp.array(get_flips(x))
+#     outputs = jax.vmap(base, in_axes=(0, None))(transformed_xs, args)
+#     return jnp.mean(outputs, axis=0)
+
+
+def call_symmetric(base, x, args):
+    # stack the four flipped inputs -> shape (4, dim)
+    transformed_xs = jnp.stack(get_flips(x))
+
+    # vectorise base over the first axis of transformed_xs; args is shared
+    outputs = jax.vmap(lambda xi: base(xi, args))(transformed_xs)
+
+    # outputs may be an ndarray (4, ...) or a pytree with leading axis 4.
+    # average across the leading axis in a pytree-safe way.
+    averaged = jax.tree_util.tree_map(lambda v: jnp.mean(v, axis=0), outputs)
+
+    return averaged
+
+
+class SymmetricPotential(eqx.Module):
+    base: PotentialResMLP
+
+    def __call__(self, x, args):
+        return call_symmetric(self.base, x, args)
+
+
+class SymmetricDissipation(eqx.Module):
+    base: DissipationMatrixMLP
+
+    def __call__(self, x, args):
+        # Use even inputs for the base network so base outputs are even functions
+        # even_input = make_even(x)
+        # M_base = self.base(even_input, args)
+
+        M_base = call_symmetric(self.base, x, args)
+
+        # Ensure symmetry robustly (in case base is numerically not exactly symmetric)
+        M_base = 0.5 * (M_base + M_base.T)
+
+        # Build a diagonal congruence transform D that introduces the required parity
+        # - D[0] = 1 (leave first coord even)
+        # - D[1] carries the sign of x[1] so M_{01} and M_{12} acquire the correct parity
+        # - D[2] carries the sign of x[2]
+        # Use sqrt(abs(x_i) + eps) so D is nonzero and the congruence preserves PD.
+        eps = 1e-8
+        d0 = 1.0
+        d1 = jnp.sign(x[1]) * jnp.sqrt(jnp.abs(x[1]) + eps)
+        d2 = jnp.sign(x[2]) * jnp.sqrt(jnp.abs(x[2]) + eps)
+        D = jnp.array([d0, d1, d2])
+
+        # Congruence transform: M = D M_base D  (implemented via outer multiplications)
+        M = (D[:, None] * M_base) * D[None, :]
+
+        return M
+
+
+class SymmetricConservation(eqx.Module):
+    base: ConservationMatrixMLP
+
+    def __call__(self, x, args):
+        # Get the base matrix from even inputs (x1, x2², x3²)
+        # even_input = make_even(x)
+        # W_base = self.base(even_input, args)
+
+        W_base = call_symmetric(self.base, x, args)
+
+        # For antisymmetric W, we need:
+        # - W12, W13: odd components
+        # - W23: even component
+        # - diagonals: zero
+
+        # Extract components from base matrix
+        # Note: W_base is antisymmetric, so W_base[1,2] = -W_base[2,1]
+        W12_odd = x[1] * W_base[0, 1]  # x[1] * even_function
+        W13_odd = x[2] * W_base[0, 2]  # x[2] * even_function
+        # For W23, since it's even and W is antisymmetric, we take the symmetric part
+        W23_even = W_base[1, 2]  # This should be even under the transformation
+
+        # Construct antisymmetric W matrix with correct parity
+        W = jnp.array(
+            [
+                [0.0, W12_odd, W13_odd],
+                [-W12_odd, 0.0, W23_even],
+                [-W13_odd, -W23_even, 0.0],
+            ]
+        )
+
+        return W
+
+
+class SymmetricDiffusion(eqx.Module):
+    base: DiffusionMLP
+
+    def __call__(self, x, args):
+        # # Transform input to even coordinates for consistency
+        # transformed_x = make_even(x)
+        # return self.base(transformed_x, args)
+
+        return call_symmetric(self.base, x, args)
 
 
 def build_model(config: DictConfig) -> SDE:
@@ -82,6 +194,12 @@ def build_model(config: DictConfig) -> SDE:
         param_idx=config.model.diffusion.param_idx,
     )
 
+    # Wrap with symmetric versions (input transformation)
+    potential = SymmetricPotential(base=potential)
+    dissipation = SymmetricDissipation(base=dissipation)
+    conservation = SymmetricConservation(base=conservation)
+    diffusion = SymmetricDiffusion(base=diffusion)
+
     # Construct the OnsagerNet model using the individual components
     sde = OnsagerNet(
         potential=potential,
@@ -129,24 +247,11 @@ def train_model(config: DictConfig) -> None:
     logger.info("=" * 60)
 
     # Initialize the MLE trainer with configuration options
-    logger.info("Setting up data augmentation...")
-    ht_aug = ReducedHeadTailFlip()
-    ref_aug = ReducedReflectionX()
-    aug = RandomChoiceAugmentation([ht_aug, ref_aug])
-
-    logger.info("Configured augmentations:")
-    logger.info("ReducedHeadTailFlip: Flips z2 - [1, -1, 1]")
-    logger.info("ReducedReflectionX: Flips z2,z3 - [1, -1, -1]")
-    logger.info("RandomChoiceAugmentation: Randomly selects one per batch")
-    logger.info(f"Augmentation probability: {config.train.aug_prob}")
-    logger.info("=" * 60)
-
+    # trainer = MLETrainer(
     trainer = RegularisedMLETrainer(
         opt_options=config.train.opt,
         rop_options=config.train.rop,
         loss_options=config.train.loss,
-        data_augmentation=aug,
-        augmentation_prob=config.train.aug_prob,
     )
 
     # Start training the model using the trainer

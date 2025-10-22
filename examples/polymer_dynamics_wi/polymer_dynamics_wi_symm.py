@@ -34,14 +34,38 @@ def make_even(x):
     return jnp.array([x[0], x[1] ** 2, x[2] ** 2])
 
 
+def get_flips(z):
+    z_flip_2 = z * jnp.array([1.0, -1.0, 1.0])
+    z_flip_3 = z * jnp.array([1.0, 1.0, -1.0])
+    z_flip_2_3 = z * jnp.array([1.0, -1.0, -1.0])
+    return z, z_flip_2, z_flip_3, z_flip_2_3
+
+
+# def call_symmetric(base, x, args):
+#     transformed_xs = jnp.array(get_flips(x))
+#     outputs = jax.vmap(base, in_axes=(0, None))(transformed_xs, args)
+#     return jnp.mean(outputs, axis=0)
+
+
+def call_symmetric(base, x, args):
+    # stack the four flipped inputs -> shape (4, dim)
+    transformed_xs = jnp.stack(get_flips(x))
+
+    # vectorise base over the first axis of transformed_xs; args is shared
+    outputs = jax.vmap(lambda xi: base(xi, args))(transformed_xs)
+
+    # outputs may be an ndarray (4, ...) or a pytree with leading axis 4.
+    # average across the leading axis in a pytree-safe way.
+    averaged = jax.tree_util.tree_map(lambda v: jnp.mean(v, axis=0), outputs)
+
+    return averaged
+
+
 class SymmetricPotential(eqx.Module):
     base: PotentialResMLP
 
     def __call__(self, x, args):
-        # Transform input to ensure V is even in x2, x3: V(x) = φ(x1, x2², x3²)
-        transformed_x = make_even(x)
-
-        return self.base(transformed_x, args)
+        return call_symmetric(self.base, x, args)
 
 
 class SymmetricDissipation(eqx.Module):
@@ -49,8 +73,10 @@ class SymmetricDissipation(eqx.Module):
 
     def __call__(self, x, args):
         # Use even inputs for the base network so base outputs are even functions
-        even_input = make_even(x)
-        M_base = self.base(even_input, args)
+        # even_input = make_even(x)
+        # M_base = self.base(even_input, args)
+
+        M_base = call_symmetric(self.base, x, args)
 
         # Ensure symmetry robustly (in case base is numerically not exactly symmetric)
         M_base = 0.5 * (M_base + M_base.T)
@@ -77,8 +103,10 @@ class SymmetricConservation(eqx.Module):
 
     def __call__(self, x, args):
         # Get the base matrix from even inputs (x1, x2², x3²)
-        even_input = make_even(x)
-        W_base = self.base(even_input, args)
+        # even_input = make_even(x)
+        # W_base = self.base(even_input, args)
+
+        W_base = call_symmetric(self.base, x, args)
 
         # For antisymmetric W, we need:
         # - W12, W13: odd components
@@ -108,9 +136,11 @@ class SymmetricDiffusion(eqx.Module):
     base: DiffusionMLP
 
     def __call__(self, x, args):
-        # Transform input to even coordinates for consistency
-        transformed_x = make_even(x)
-        return self.base(transformed_x, args)
+        # # Transform input to even coordinates for consistency
+        # transformed_x = make_even(x)
+        # return self.base(transformed_x, args)
+
+        return call_symmetric(self.base, x, args)
 
 
 def build_model(config: DictConfig) -> SDE:
